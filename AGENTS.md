@@ -95,6 +95,8 @@ scripts/              # Dev tooling
 
 ## Getting Started
 
+Use one toolchain environment at a time. Hermit is the portable default:
+
 ```bash
 . ./bin/activate-hermit   # activate hermit toolchain (Rust, Node, etc.)
 cp .env.example .env      # configure local environment
@@ -102,6 +104,20 @@ just setup                # install deps, run migrations
 just relay                # start relay at ws://localhost:3000
 just ci                   # run before any PR
 ```
+
+Nix is a supported alternative when it is already available on the host:
+
+```bash
+nix develop --command just setup
+nix develop .#mobile --command just ci
+```
+
+The default Nix shell covers Rust, relay, desktop, and web development. Use
+`nix develop .#mobile --command just <recipe>` for Flutter work and aggregate
+gates (`just check`, `just ci`, and pre-push), or `.#full` for the mobile
+toolchain plus occasional tools such as `gh` and `uv`. Do not activate Hermit
+inside a Nix shell. Agents must not assume that Nix or direnv is installed;
+follow the environment selected by the contributor.
 
 See CONTRIBUTING.md for full setup details and dependency requirements.
 
@@ -132,15 +148,18 @@ branch actually changed a file it covers, never because `origin/main` moved.
 These lanes validate the checked-out HEAD; pushing a non-HEAD ref (explicit
 refspec, `--all`) gets a non-fatal `push-head-scope` warning and relies on CI for
 its path-scoped checks.
-Before agents run Git or hooks, activate the repo's Hermit environment
-(`. ./bin/activate-hermit`) so `./bin` leads `PATH` and the pinned toolchain
-(flutter, dart, lefthook) wins over any Homebrew version; do not
-rewrite hook commands to compensate for an unconfigured shell `PATH`. The
-pre-push hook self-pins regardless: `bin/.lefthookrc` (sourced by the generated
-`.git/hooks/*`) prepends the Hermit `bin/` to `PATH` and pins `LEFTHOOK_BIN`, so
-lane subprocesses resolve the pinned flutter/dart/lefthook even when an
-unactivated shell has Homebrew first. Activating Hermit remains recommended for
-non-hook commands.
+Before agents run Git or hooks, ensure one of the repository toolchain
+environments is active. If
+`IN_NIX_SHELL` is set, use the current Nix environment directly. Otherwise
+activate Hermit with `. ./bin/activate-hermit`, unless the contributor explicitly
+selected Nix; for non-interactive Nix work, use `nix develop --command ...` for
+desktop/web/Rust recipes and `nix develop .#mobile --command ...` for mobile or
+aggregate gates. Because pre-push runs mobile tests, enter `.#mobile` before
+pushing from a Nix environment. Do not rewrite hook commands to compensate for
+an unconfigured shell `PATH`. The pre-push hook self-pins regardless:
+`bin/.lefthookrc` (sourced by the generated `.git/hooks/*`) prepends the Hermit
+`bin/` to `PATH` and pins `LEFTHOOK_BIN`, so lane subprocesses resolve the pinned
+flutter/dart/lefthook even when an unactivated shell has Homebrew first.
 
 **Commit with `git commit -s`.** The required **DCO Check** fails any PR with a commit missing a `Signed-off-by` trailer, and `just hooks` installs a `commit-msg` hook that adds it to commits you create locally (`git rebase` and `git cherry-pick` still need `--signoff`) — if you build commit commands programmatically, include `-s` every time. To repair a branch that already has unsigned commits: `git rebase --signoff main`, then force-push.
 

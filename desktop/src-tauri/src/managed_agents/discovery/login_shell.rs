@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::is_executable_file;
+use super::{is_executable_file, path_candidates_from_env};
 
 /// Test-only spawn counter lives beside `discovery.rs`; import it here so the
 /// spawn-record call site stays byte-identical to the pre-extraction source.
@@ -16,13 +16,19 @@ use super::login_shell_spawn_probe;
 
 /// Collect login shell candidates for the current platform.
 ///
-/// On Unix: `/bin/zsh`, `/bin/bash` (the historical defaults).
+/// On Unix: existing historical `/bin` locations followed by zsh/bash found
+/// on PATH. The latter supports non-FHS distributions such as NixOS.
 /// On Windows: Git Bash via `resolve_bash_path` — skips `BUZZ_SHELL` because
 /// login-shell callers use bash-only `-l -c` syntax.
 pub(crate) fn login_shell_candidates() -> Vec<PathBuf> {
     #[cfg(not(windows))]
     {
-        vec![PathBuf::from("/bin/zsh"), PathBuf::from("/bin/bash")]
+        let mut candidates = vec![PathBuf::from("/bin/zsh"), PathBuf::from("/bin/bash")];
+        candidates.extend(path_candidates_from_env("zsh"));
+        candidates.extend(path_candidates_from_env("bash"));
+        candidates.retain(|candidate| is_executable_file(candidate));
+        candidates.dedup();
+        candidates
     }
     #[cfg(windows)]
     {

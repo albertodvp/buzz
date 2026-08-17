@@ -321,6 +321,31 @@ fn extract_thread_cursor(raw: &Value) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+type ActiveThreadCursor = (chrono::DateTime<chrono::Utc>, Vec<u8>);
+type ActiveThreadCursorResult = Result<Option<ActiveThreadCursor>, &'static str>;
+
+fn extract_active_thread_cursor(raw: &Value) -> ActiveThreadCursorResult {
+    let at = raw.get("thread_activity_cursor");
+    let id = raw.get("thread_activity_cursor_id");
+    match (at, id) {
+        (None, None) => Ok(None),
+        (Some(at), Some(id)) => {
+            let seconds = at
+                .as_i64()
+                .ok_or("thread activity cursor must be an integer")?;
+            let timestamp = chrono::DateTime::from_timestamp(seconds, 0)
+                .ok_or("thread activity cursor is out of range")?;
+            let id = id.as_str().ok_or("thread activity cursor id must be hex")?;
+            if id.len() != 64 {
+                return Err("thread activity cursor id must be 64 hex characters");
+            }
+            let bytes = hex::decode(id).map_err(|_| "thread activity cursor id must be hex")?;
+            Ok(Some((timestamp, bytes)))
+        }
+        _ => Err("thread activity cursor requires timestamp and id together"),
+    }
+}
+
 fn extract_feed_types(raw: &Value) -> Option<Vec<String>> {
     let arr = raw.get("feed_types")?.as_array()?;
     let types: Vec<String> = arr
@@ -581,6 +606,126 @@ async fn handle_channel_window_filter(
         .map_err(|e| internal_error(&format!("window overlay serialize: {e}")))?;
     events.push(v);
 
+    Ok(())
+}
+
+/// Serve one permission-scoped active-thread page. The database aggregate is
+/// authoritative; loaded client messages are never consulted.
+async fn handle_active_threads_filter(
+    state: &AppState,
+    tenant: &buzz_core::TenantContext,
+    raw: &Value,
+    filter: &nostr::Filter,
+    accessible_channels: &[uuid::Uuid],
+    events: &mut Vec<Value>,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    use buzz_core::kind::{KIND_THREAD_SUMMARY, KIND_WINDOW_BOUNDS};
+
+    let Some(channel_id) = extract_channel_from_filter(filter) else {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "thread_roots_by_activity requires exactly one #h channel",
+        ));
+    };
+    if !accessible_channels.contains(&channel_id) {
+        return Ok(());
+    }
+    let active_since = match raw.get("thread_active_since") {
+        None => None,
+        Some(value) => {
+            let seconds = value.as_i64().ok_or_else(|| {
+                api_error(
+                    StatusCode::BAD_REQUEST,
+                    "thread_active_since must be an integer",
+                )
+            })?;
+            Some(chrono::DateTime::from_timestamp(seconds, 0).ok_or_else(|| {
+                api_error(
+                    StatusCode::BAD_REQUEST,
+                    "thread_active_since is out of range",
+                )
+            })?)
+        }
+    };
+    let cursor = extract_active_thread_cursor(raw)
+        .map_err(|message| api_error(StatusCode::BAD_REQUEST, message))?;
+    let limit = filter
+        .limit
+        .map(|value| value as u32)
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let window = state
+        .db
+        .get_active_threads(
+            tenant.community(),
+            channel_id,
+            active_since,
+            cursor.clone(),
+            limit,
+        )
+        .await
+        .map_err(|error| internal_error(&format!("active threads error: {error}")))?;
+
+    let sign = |kind: u32, tags: Vec<nostr::Tag>, content: String| {
+        nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content)
+            .tags(tags)
+            .sign_with_keys(&state.relay_keypair)
+            .map_err(|error| internal_error(&format!("active thread overlay sign: {error}")))
+    };
+    let parse_tag = |parts: [&str; 2]| {
+        nostr::Tag::parse(parts)
+            .map_err(|error| internal_error(&format!("active thread overlay tag: {error}")))
+    };
+    let channel = channel_id.to_string();
+    for row in &window.rows {
+        let root_id = row.stored_event.event.id.to_hex();
+        events.push(
+            serde_json::to_value(&row.stored_event.event).map_err(|error| {
+                internal_error(&format!("active thread root serialize: {error}"))
+            })?,
+        );
+        let content = serde_json::json!({
+            "reply_count": row.summary.reply_count,
+            "descendant_count": row.summary.descendant_count,
+            "last_reply_at": row.summary.last_reply_at.map(|value| value.timestamp()),
+            "latest_activity_at": row.latest_activity_at.timestamp(),
+            "participants": row.summary.participants.iter().map(hex::encode).collect::<Vec<_>>(),
+        });
+        let overlay = sign(
+            KIND_THREAD_SUMMARY,
+            vec![
+                parse_tag(["e", &root_id])?,
+                parse_tag(["d", &root_id])?,
+                parse_tag(["h", &channel])?,
+            ],
+            content.to_string(),
+        )?;
+        events.push(serde_json::to_value(overlay).map_err(|error| {
+            internal_error(&format!("active thread summary serialize: {error}"))
+        })?);
+    }
+
+    let suffix = cursor
+        .as_ref()
+        .map(|(at, id)| format!("{}:{}", at.timestamp(), hex::encode(id)))
+        .unwrap_or_else(|| "head".to_owned());
+    let bounds_key = format!("{channel}:active-threads:{suffix}");
+    let content = serde_json::json!({
+        "has_more": window.has_more,
+        "next_cursor": window.next_cursor.as_ref().map(|(at, id)| serde_json::json!({
+            "latest_activity_at": at.timestamp(),
+            "id": hex::encode(id),
+        })),
+    });
+    let bounds = sign(
+        KIND_WINDOW_BOUNDS,
+        vec![parse_tag(["d", &bounds_key])?, parse_tag(["h", &channel])?],
+        content.to_string(),
+    )?;
+    events
+        .push(serde_json::to_value(bounds).map_err(|error| {
+            internal_error(&format!("active thread bounds serialize: {error}"))
+        })?);
     Ok(())
 }
 
@@ -1036,10 +1181,27 @@ async fn query_events_authed(
     let mut events: Vec<Value> = Vec::new();
     let mut handled: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
+    // Authoritative active-thread filters are distinct from timeline windows.
+    for (idx, (raw, filter)) in raw_filters.iter().zip(filters.iter()).enumerate() {
+        if !extension_flag(raw, "thread_roots_by_activity") {
+            continue;
+        }
+        handle_active_threads_filter(
+            state,
+            tenant,
+            raw,
+            filter,
+            &accessible_channels,
+            &mut events,
+        )
+        .await?;
+        handled.insert(idx);
+    }
+
     // Channel-window filters (`top_level: true`) — the GUI read-model surface.
     // Dispatched first: a window filter is never a feed/thread/catchall query.
     for (idx, (raw, filter)) in raw_filters.iter().zip(filters.iter()).enumerate() {
-        if !extension_flag(raw, "top_level") {
+        if handled.contains(&idx) || !extension_flag(raw, "top_level") {
             continue;
         }
         handle_channel_window_filter(
@@ -2250,6 +2412,19 @@ mod tests {
     use super::*;
     use nostr::{Alphabet, EventBuilder, Keys, Kind, SingleLetterTag, Tag};
     use std::sync::Mutex;
+
+    #[test]
+    fn active_thread_extensions_require_complete_cursor() {
+        let valid = serde_json::json!({
+            "thread_activity_cursor": 100,
+            "thread_activity_cursor_id": "01".repeat(32)
+        });
+        assert!(extract_active_thread_cursor(&valid)
+            .expect("valid cursor")
+            .is_some());
+        let half = serde_json::json!({ "thread_activity_cursor": 100 });
+        assert!(extract_active_thread_cursor(&half).is_err());
+    }
 
     fn redis_pool() -> deadpool_redis::Pool {
         let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());

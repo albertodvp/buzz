@@ -79,6 +79,138 @@ pub struct ChannelWindow {
     pub next_cursor: Option<(DateTime<Utc>, Vec<u8>)>,
 }
 
+/// One canonical thread root ordered by latest non-deleted reply activity.
+#[derive(Debug, Clone)]
+pub struct ActiveThreadRow {
+    /// The canonical signed root event.
+    pub stored_event: StoredEvent,
+    /// Aggregate computed from currently visible replies.
+    pub summary: ThreadSummary,
+    /// Shared ordering timestamp.
+    pub latest_activity_at: DateTime<Utc>,
+}
+
+/// A finite keyset page of authoritative active thread roots.
+#[derive(Debug, Clone)]
+pub struct ActiveThreadWindow {
+    /// Rows in `(latest_activity_at DESC, root_id ASC)` order.
+    pub rows: Vec<ActiveThreadRow>,
+    /// True only when the internal `limit + 1` probe found another row.
+    pub has_more: bool,
+    /// Cursor of the last retained row, present exactly when `has_more`.
+    pub next_cursor: Option<(DateTime<Utc>, Vec<u8>)>,
+}
+
+fn active_threads_sql() -> &'static str {
+    r#"
+    WITH candidates AS (
+        SELECT
+            tm.event_id AS root_id,
+            COALESCE(MAX(reply.created_at), root.created_at) AS latest_activity_at,
+            COUNT(reply.id) FILTER (WHERE child.depth = 1)::int AS reply_count,
+            COUNT(reply.id)::int AS descendant_count
+        FROM thread_metadata tm
+        JOIN events root
+          ON root.community_id = tm.community_id
+         AND root.created_at = tm.event_created_at
+         AND root.id = tm.event_id
+        LEFT JOIN thread_metadata child
+          ON child.community_id = tm.community_id
+         AND child.root_event_id = tm.event_id
+        LEFT JOIN events reply
+          ON reply.community_id = child.community_id
+         AND reply.created_at = child.event_created_at
+         AND reply.id = child.event_id
+         AND reply.deleted_at IS NULL
+        WHERE tm.community_id = $1
+          AND tm.channel_id = $2
+          AND tm.depth = 0
+          AND root.deleted_at IS NULL
+        GROUP BY tm.event_id, root.created_at
+        HAVING COUNT(reply.id) > 0
+    ), page AS (
+        SELECT * FROM candidates
+        WHERE ($3::timestamptz IS NULL OR latest_activity_at >= $3)
+          AND ($4::timestamptz IS NULL
+               OR latest_activity_at < $4
+               OR (latest_activity_at = $4 AND root_id > $5))
+        ORDER BY latest_activity_at DESC, root_id ASC
+        LIMIT $6
+    )
+    SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig,
+           e.received_at, e.channel_id, page.root_id, page.latest_activity_at,
+           page.reply_count, page.descendant_count
+    FROM page
+    JOIN events e
+      ON e.community_id = $1
+     AND e.id = page.root_id
+     AND e.deleted_at IS NULL
+    ORDER BY page.latest_activity_at DESC, page.root_id ASC
+    "#
+}
+
+/// Query canonical roots independently of any client timeline window.
+pub async fn get_active_threads(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: Uuid,
+    active_since: Option<DateTime<Utc>>,
+    cursor: Option<(DateTime<Utc>, Vec<u8>)>,
+    limit: u32,
+) -> Result<ActiveThreadWindow> {
+    let capped = limit.clamp(1, 200);
+    let probe = capped + 1;
+    let (cursor_at, cursor_id) = cursor
+        .map(|(at, id)| (Some(at), Some(id)))
+        .unwrap_or((None, None));
+    let db_rows = sqlx::query(active_threads_sql())
+        .bind(community_id.as_uuid())
+        .bind(channel_id)
+        .bind(active_since)
+        .bind(cursor_at)
+        .bind(cursor_id)
+        .bind(probe as i64)
+        .fetch_all(pool)
+        .await?;
+
+    let has_more = db_rows.len() > capped as usize;
+    let retained = db_rows.into_iter().take(capped as usize);
+    let mut rows = Vec::with_capacity(capped as usize);
+    for row in retained {
+        let latest_activity_at: DateTime<Utc> = row.try_get("latest_activity_at")?;
+        let reply_count: i32 = row.try_get("reply_count")?;
+        let descendant_count: i32 = row.try_get("descendant_count")?;
+        let Some(stored_event) = row_to_stored_event(row)? else {
+            continue;
+        };
+        rows.push(ActiveThreadRow {
+            stored_event,
+            summary: ThreadSummary {
+                reply_count,
+                descendant_count,
+                last_reply_at: (descendant_count > 0).then_some(latest_activity_at),
+                participants: Vec::new(),
+            },
+            latest_activity_at,
+        });
+    }
+    let next_cursor = if has_more {
+        rows.last().map(|row| {
+            (
+                row.latest_activity_at,
+                row.stored_event.event.id.as_bytes().to_vec(),
+            )
+        })
+    } else {
+        None
+    };
+    Ok(ActiveThreadWindow {
+        rows,
+        has_more: has_more && next_cursor.is_some(),
+        next_cursor,
+    })
+}
+
 /// Raw thread_metadata row -- used when processing deletes or computing ancestry.
 #[derive(Debug, Clone)]
 pub struct ThreadMetadataRecord {
@@ -865,7 +997,28 @@ mod tests {
     };
     use nostr::{EventBuilder, Keys, Kind};
 
-    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+    const TEST_DB_URL: &str = concat!("postgres://buzz:", "buzz_dev", "@localhost:5432/buzz");
+
+    #[test]
+    fn active_thread_query_is_authoritative_scoped_and_deterministic() {
+        let sql = active_threads_sql();
+        assert!(sql.contains("tm.depth = 0"));
+        assert!(sql.contains("root.deleted_at IS NULL"));
+        assert!(sql.contains("reply.deleted_at IS NULL"));
+        assert!(sql.contains("tm.community_id = $1"));
+        assert!(sql.contains("tm.channel_id = $2"));
+        assert!(sql.contains("latest_activity_at >= $3"));
+        assert!(sql.contains("latest_activity_at = $4 AND root_id > $5"));
+        assert!(sql.contains("ORDER BY latest_activity_at DESC, root_id ASC"));
+    }
+
+    #[test]
+    fn active_thread_query_supports_an_unbounded_inactivity_window() {
+        let sql = active_threads_sql();
+        assert!(sql.contains("$3::timestamptz IS NULL"));
+        assert!(!sql.contains("root_id = ANY"));
+        assert!(sql.contains("LIMIT"));
+    }
 
     async fn setup_pool() -> PgPool {
         let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")

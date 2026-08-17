@@ -18,6 +18,8 @@ import 'channel_sections/channel_sections_provider.dart';
 import 'channel_stars/channel_stars_provider.dart';
 import 'channels_provider.dart';
 import 'manage_channel_sheet.dart';
+import 'thread_sidebar/thread_sidebar_models.dart';
+import 'thread_sidebar/thread_sidebar_provider.dart';
 import '../../shared/read_state/read_state_provider.dart';
 import '../../shared/read_state/read_state_time.dart';
 
@@ -180,6 +182,35 @@ class ChannelActionsSheet extends ConsumerWidget {
                     );
                   },
                 ),
+              if (!channel.isDm)
+                ListTile(
+                  key: ValueKey('thread-inactivity-${channel.id}'),
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(LucideIcons.clock3),
+                  title: const Text('Hide threads after inactivity'),
+                  trailing: Text(
+                    ref
+                        .watch(threadSidebarProvider)
+                        .preferenceFor(channel.id)
+                        .inactivity
+                        .label,
+                    style: context.textTheme.bodyMedium?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                    ),
+                  ),
+                  onTap: () async {
+                    final pageContext = Navigator.of(
+                      context,
+                      rootNavigator: true,
+                    ).context;
+                    close();
+                    await _showThreadInactivitySheet(
+                      pageContext,
+                      ref,
+                      channel.id,
+                    );
+                  },
+                ),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(isMuted ? LucideIcons.bell : LucideIcons.bellOff),
@@ -329,6 +360,68 @@ class ChannelActionsSheet extends ConsumerWidget {
       ),
     );
   }
+}
+
+Future<void> _showThreadInactivitySheet(
+  BuildContext context,
+  WidgetRef ref,
+  String channelId,
+) async {
+  final selected = ref
+      .read(threadSidebarProvider)
+      .preferenceFor(channelId)
+      .inactivity;
+  await showBuzzModalBottomSheet<void>(
+    context: context,
+    title: 'Hide threads after inactivity',
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          Grid.gutter,
+          0,
+          Grid.gutter,
+          Grid.xs,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            RadioGroup<ThreadSidebarInactivity>(
+              groupValue: selected,
+              onChanged: (value) {
+                if (value != null) {
+                  Navigator.of(sheetContext).pop();
+                  unawaited(
+                    ref
+                        .read(threadSidebarProvider.notifier)
+                        .setInactivity(channelId, value),
+                  );
+                }
+              },
+              child: Column(
+                children: [
+                  for (final choice in ThreadSidebarInactivity.values)
+                    RadioListTile<ThreadSidebarInactivity>(
+                      key: ValueKey('thread-inactivity-${choice.storageValue}'),
+                      contentPadding: EdgeInsets.zero,
+                      value: choice,
+                      title: Text(choice.label),
+                    ),
+                ],
+              ),
+            ),
+            Text(
+              'This setting stays on this device.',
+              style: sheetContext.textTheme.bodySmall?.copyWith(
+                color: sheetContext.colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _ChannelQuickActionsRow extends StatelessWidget {

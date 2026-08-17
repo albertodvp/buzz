@@ -46,6 +46,11 @@ import 'channel_sort/channel_sort_provider.dart';
 import 'channel_sort/channel_sort_storage.dart';
 import 'channel_stars/channel_stars_provider.dart';
 import 'channels_provider.dart';
+import 'thread_detail_page.dart';
+import 'thread_sidebar/thread_sidebar_provider.dart';
+import 'thread_sidebar/thread_sidebar_models.dart';
+import 'thread_sidebar/thread_sidebar_row.dart';
+import 'timeline_message.dart';
 import '../../shared/read_state/deferred_read_state_update.dart';
 import '../../shared/read_state/read_state_format.dart';
 import '../../shared/read_state/read_state_provider.dart';
@@ -259,6 +264,9 @@ class ChannelsPage extends HookConsumerWidget {
           builder: (_) => ChannelDetailPage(channel: channel),
         ),
       );
+      if (context.mounted) {
+        unawaited(ref.read(threadSidebarProvider.notifier).refresh());
+      }
     }
 
     // Only surface fetch errors while the relay is stably connected. During a
@@ -370,7 +378,10 @@ class ChannelsPage extends HookConsumerWidget {
         topSectionHeight: topSectionHeight,
         usesPinnedGradient: usesPinnedGradient,
         scrollController: channelsScrollController,
-        onRefresh: () => ref.read(channelsProvider.notifier).refresh(),
+        onRefresh: () async {
+          await ref.read(channelsProvider.notifier).refresh();
+          await ref.read(threadSidebarProvider.notifier).refresh();
+        },
         onSelectChannel: openChannel,
       ),
     );

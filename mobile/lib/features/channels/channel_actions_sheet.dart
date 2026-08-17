@@ -412,7 +412,7 @@ Future<void> _showThreadInactivitySheet(
               ),
             ),
             Text(
-              'This setting stays on this device.',
+              'This setting and your bookmarks stay on this device.',
               style: sheetContext.textTheme.bodySmall?.copyWith(
                 color: sheetContext.colors.onSurfaceVariant,
               ),

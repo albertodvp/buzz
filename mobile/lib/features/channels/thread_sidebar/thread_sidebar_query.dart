@@ -10,7 +10,10 @@ NostrFilter activeThreadsFilter({
   required ChannelThreadSidebarPreference preference,
   required int nowSeconds,
 }) {
-  final cutoff = threadSidebarCutoff(preference.inactivity, nowSeconds);
+  final includedRootIds = preference.bookmarks.keys.toList()..sort();
+  final cutoff = preference.inactivity == ThreadSidebarInactivity.bookmarksOnly
+      ? nowSeconds + 1
+      : threadSidebarCutoff(preference.inactivity, nowSeconds);
   return NostrFilter(
     kinds: const [EventKind.streamMessage],
     tags: {
@@ -19,6 +22,7 @@ NostrFilter activeThreadsFilter({
     limit: 50,
     extensions: {
       'thread_roots_by_activity': true,
+      'include_thread_roots': includedRootIds,
       'thread_active_since': ?cutoff,
     },
   );

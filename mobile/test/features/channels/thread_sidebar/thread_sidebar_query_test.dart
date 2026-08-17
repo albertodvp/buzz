@@ -23,25 +23,30 @@ NostrEvent _event({
 );
 
 void main() {
-  test('builds the relay active-thread query with an activity cutoff', () {
-    final filter = activeThreadsFilter(
-      channelId: _channelId,
-      preference: const ChannelThreadSidebarPreference(
-        inactivity: ThreadSidebarInactivity.threeDays,
-      ),
-      nowSeconds: 1_000_000,
-    );
+  test(
+    'builds the relay active-thread query with local bookmark inclusions',
+    () {
+      final filter = activeThreadsFilter(
+        channelId: _channelId,
+        preference: const ChannelThreadSidebarPreference(
+          inactivity: ThreadSidebarInactivity.threeDays,
+          bookmarks: {'bookmarked-root': ThreadBookmark(updatedAt: 10)},
+        ),
+        nowSeconds: 1_000_000,
+      );
 
-    expect(filter.kinds, [EventKind.streamMessage]);
-    expect(filter.tags, {
-      '#h': [_channelId],
-    });
-    expect(filter.limit, 50);
-    expect(filter.extensions, {
-      'thread_roots_by_activity': true,
-      'thread_active_since': 740800,
-    });
-  });
+      expect(filter.kinds, [EventKind.streamMessage]);
+      expect(filter.tags, {
+        '#h': [_channelId],
+      });
+      expect(filter.limit, 50);
+      expect(filter.extensions, {
+        'thread_roots_by_activity': true,
+        'include_thread_roots': ['bookmarked-root'],
+        'thread_active_since': 740800,
+      });
+    },
+  );
 
   test('parses roots and activity summaries from a batched relay response', () {
     final events = [
@@ -80,7 +85,7 @@ void main() {
     expect(rows[_channelId]!.single.latestReplyAt, 900);
   });
 
-  test('projects recent threads and excludes stale threads', () {
+  test('projects recent and bookmarked stale threads independently', () {
     final rows = [
       ActiveThreadRow(
         root: _event(
@@ -90,6 +95,15 @@ void main() {
         ),
         latestActivityAt: 950,
         latestReplyAt: 950,
+      ),
+      ActiveThreadRow(
+        root: _event(
+          id: 'stale-bookmark',
+          kind: EventKind.streamMessage,
+          content: 'Saved',
+        ),
+        latestActivityAt: 100,
+        latestReplyAt: 100,
       ),
       ActiveThreadRow(
         root: _event(
@@ -106,11 +120,13 @@ void main() {
       rows: rows,
       preference: const ChannelThreadSidebarPreference(
         inactivity: ThreadSidebarInactivity.oneDay,
+        bookmarks: {'stale-bookmark': ThreadBookmark(updatedAt: 1)},
       ),
       nowSeconds: 87_000,
     );
 
-    expect(projected.map((row) => row.root.id), ['recent']);
+    expect(projected.map((row) => row.root.id), ['recent', 'stale-bookmark']);
+    expect(projected.last.bookmarked, isTrue);
   });
 
   test('unread state requires a reply newer than the read frontier', () {

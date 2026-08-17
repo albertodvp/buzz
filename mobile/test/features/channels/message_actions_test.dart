@@ -513,6 +513,23 @@ void main() {
       await tester.pumpAndSettle();
       expect(container.read(threadFollowsProvider).followedRootIds, isEmpty);
     });
+
+    testWidgets('offers a local bookmark action for the effective thread', (
+      tester,
+    ) async {
+      final prefs = await _mockPrefs();
+      await _pumpSheet(
+        tester,
+        message: _message(rootId: 'root-9'),
+        prefs: prefs,
+      );
+
+      expect(find.text('Bookmark thread'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('bookmark-thread-root-9')),
+        findsOneWidget,
+      );
+    });
   });
 
   group('showImageActions', () {

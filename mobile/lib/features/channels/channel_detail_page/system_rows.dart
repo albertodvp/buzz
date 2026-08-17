@@ -549,6 +549,11 @@ class _ThreadSummaryRow extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final userCache = ref.watch(userCacheProvider);
+    final bookmarked = ref.watch(
+      threadSidebarProvider.select(
+        (state) => state.isBookmarked(channelId, message.id),
+      ),
+    );
 
     return GestureDetector(
       onTap: () {
@@ -628,6 +633,19 @@ class _ThreadSummaryRow extends ConsumerWidget {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            if (bookmarked) ...[
+              const SizedBox(width: Grid.xxs),
+              Tooltip(
+                message: 'Bookmarked thread',
+                child: Icon(
+                  LucideIcons.bookmark,
+                  key: ValueKey('thread-summary-bookmark-${message.id}'),
+                  size: 14,
+                  fill: 1,
+                  color: context.colors.primary,
+                ),
+              ),
+            ],
           ],
         ),
       ),

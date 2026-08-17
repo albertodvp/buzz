@@ -147,6 +147,11 @@ class _ChannelTile extends ConsumerWidget {
                   ]),
                 ),
             onTap: () => unawaited(_openThread(context, ref, thread)),
+            onToggleBookmark: () => unawaited(
+              ref
+                  .read(threadSidebarProvider.notifier)
+                  .toggleBookmark(channel.id, thread.root.id),
+            ),
           ),
       ],
     );

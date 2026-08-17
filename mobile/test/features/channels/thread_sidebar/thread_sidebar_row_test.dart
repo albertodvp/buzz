@@ -19,9 +19,10 @@ const _root = NostrEvent(
 
 void main() {
   testWidgets(
-    'renders a readable, tappable thread row with a useful touch target',
+    'renders an accessible bookmarked thread with both interactions',
     (tester) async {
       var taps = 0;
+      var longPresses = 0;
       await tester.pumpWidget(
         MaterialApp(
           theme: AppTheme.light(),
@@ -31,15 +32,21 @@ void main() {
                 root: _root,
                 latestActivityAt: 100,
                 latestReplyAt: 100,
+                bookmarked: true,
               ),
               isUnread: true,
               onTap: () => taps++,
+              onToggleBookmark: () => longPresses++,
             ),
           ),
         ),
       );
 
       expect(find.text('A useful thread'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('bookmarked-thread-root-1')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('unread-thread-root-1')),
         findsOneWidget,
@@ -53,6 +60,10 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('channel-thread-root-1')));
       expect(taps, 1);
+      await tester.longPress(
+        find.byKey(const ValueKey('channel-thread-root-1')),
+      );
+      expect(longPresses, 1);
     },
   );
 }

@@ -5,7 +5,8 @@ enum ThreadSidebarInactivity {
   threeDays('3d', '3 days'),
   sevenDays('7d', '7 days'),
   thirtyDays('30d', '30 days'),
-  never('never', 'Never');
+  never('never', 'Never'),
+  bookmarksOnly('bookmarks-only', 'Only bookmarks');
 
   const ThreadSidebarInactivity(this.storageValue, this.label);
 
@@ -22,14 +23,22 @@ enum ThreadSidebarInactivity {
 
 const defaultThreadSidebarInactivity = ThreadSidebarInactivity.threeDays;
 
+class ThreadBookmark {
+  const ThreadBookmark({required this.updatedAt});
+
+  final int updatedAt;
+}
+
 class ChannelThreadSidebarPreference {
   const ChannelThreadSidebarPreference({
     this.inactivity = defaultThreadSidebarInactivity,
     this.updatedAt = 0,
+    this.bookmarks = const {},
   });
 
   final ThreadSidebarInactivity inactivity;
   final int updatedAt;
+  final Map<String, ThreadBookmark> bookmarks;
 }
 
 class ThreadSidebarPreferences {
@@ -58,11 +67,13 @@ class ProjectedThreadRow {
     required this.root,
     required this.latestActivityAt,
     required this.latestReplyAt,
+    required this.bookmarked,
   });
 
   final NostrEvent root;
   final int latestActivityAt;
   final int? latestReplyAt;
+  final bool bookmarked;
 }
 
 bool isThreadSidebarUnread({required int? latestReplyAt, int? readAt}) =>
@@ -74,7 +85,8 @@ int? threadSidebarCutoff(ThreadSidebarInactivity inactivity, int nowSeconds) =>
       ThreadSidebarInactivity.threeDays => nowSeconds - (3 * 86400),
       ThreadSidebarInactivity.sevenDays => nowSeconds - (7 * 86400),
       ThreadSidebarInactivity.thirtyDays => nowSeconds - (30 * 86400),
-      ThreadSidebarInactivity.never => null,
+      ThreadSidebarInactivity.never ||
+      ThreadSidebarInactivity.bookmarksOnly => null,
     };
 
 List<ProjectedThreadRow> projectThreadRows({
@@ -85,16 +97,19 @@ List<ProjectedThreadRow> projectThreadRows({
   final cutoff = threadSidebarCutoff(preference.inactivity, nowSeconds);
   final projected = <ProjectedThreadRow>[];
   for (final row in rows) {
+    final bookmarked = preference.bookmarks.containsKey(row.root.id);
     final automatic = switch (preference.inactivity) {
       ThreadSidebarInactivity.never => true,
+      ThreadSidebarInactivity.bookmarksOnly => false,
       _ => cutoff != null && row.latestActivityAt >= cutoff,
     };
-    if (!automatic) continue;
+    if (!bookmarked && !automatic) continue;
     projected.add(
       ProjectedThreadRow(
         root: row.root,
         latestActivityAt: row.latestActivityAt,
         latestReplyAt: row.latestReplyAt,
+        bookmarked: bookmarked,
       ),
     );
   }

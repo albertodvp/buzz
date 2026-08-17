@@ -34,6 +34,9 @@ class ThreadSidebarState {
         preference: preferenceFor(channelId),
         nowSeconds: nowSeconds,
       );
+
+  bool isBookmarked(String channelId, String rootId) =>
+      preferenceFor(channelId).bookmarks.containsKey(rootId);
 }
 
 class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
@@ -144,6 +147,37 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
     }
   }
 
+  Future<void> toggleBookmark(String channelId, String rootId) async {
+    final key = _storageKey;
+    final storage = _storage;
+    if (key == null || storage == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final preference = state.preferenceFor(channelId);
+    final bookmarks = Map<String, ThreadBookmark>.of(preference.bookmarks);
+    if (bookmarks.containsKey(rootId)) {
+      bookmarks.remove(rootId);
+    } else {
+      bookmarks[rootId] = ThreadBookmark(updatedAt: now);
+    }
+    final preferences = ThreadSidebarPreferences(
+      channels: {
+        ...state.preferences.channels,
+        channelId: ChannelThreadSidebarPreference(
+          inactivity: preference.inactivity,
+          updatedAt: now,
+          bookmarks: bookmarks,
+        ),
+      },
+    );
+    if (!await storage.write(key, preferences) || key != _storageKey) return;
+    state = ThreadSidebarState(
+      isReady: true,
+      preferences: preferences,
+      rowsByChannel: state.rowsByChannel,
+    );
+    await refresh();
+  }
+
   Future<void> setInactivity(
     String channelId,
     ThreadSidebarInactivity inactivity,
@@ -152,12 +186,14 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
     final storage = _storage;
     if (key == null || storage == null) return;
     final now = DateTime.now().millisecondsSinceEpoch;
+    final preference = state.preferenceFor(channelId);
     final preferences = ThreadSidebarPreferences(
       channels: {
         ...state.preferences.channels,
         channelId: ChannelThreadSidebarPreference(
           inactivity: inactivity,
           updatedAt: now,
+          bookmarks: preference.bookmarks,
         ),
       },
     );

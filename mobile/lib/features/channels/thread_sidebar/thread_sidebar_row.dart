@@ -12,16 +12,19 @@ class MobileThreadSidebarRow extends StatelessWidget {
     required this.thread,
     required this.isUnread,
     required this.onTap,
+    required this.onToggleBookmark,
   });
 
   final ProjectedThreadRow thread;
   final bool isUnread;
   final VoidCallback onTap;
+  final VoidCallback onToggleBookmark;
 
   @override
   Widget build(BuildContext context) => InkWell(
     key: ValueKey('channel-thread-${thread.root.id}'),
     onTap: onTap,
+    onLongPress: onToggleBookmark,
     child: ConstrainedBox(
       constraints: const BoxConstraints(minHeight: _threadRowMinHeight),
       child: Padding(
@@ -62,6 +65,19 @@ class MobileThreadSidebarRow extends StatelessWidget {
                     color: context.colors.primary,
                     shape: BoxShape.circle,
                   ),
+                ),
+              ),
+            ],
+            if (thread.bookmarked) ...[
+              const SizedBox(width: Grid.xxs),
+              Tooltip(
+                message: 'Bookmarked thread',
+                child: Icon(
+                  LucideIcons.bookmark,
+                  key: ValueKey('bookmarked-thread-${thread.root.id}'),
+                  size: 14,
+                  fill: 1,
+                  color: navigationPrimaryForeground(context),
                 ),
               ),
             ],

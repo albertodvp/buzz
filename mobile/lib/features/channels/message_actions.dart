@@ -34,9 +34,11 @@ import '../../shared/read_state/read_state_format.dart';
 import '../../shared/read_state/read_state_provider.dart';
 import 'thread_detail_page.dart';
 import 'thread_follows/thread_follows_provider.dart';
+import 'thread_sidebar/thread_sidebar_provider.dart';
 import 'timeline_message.dart';
 
 part 'message_actions/reaction_popover.dart';
+part 'message_actions/thread_bookmark_tile.dart';
 
 /// Preview length for reminder targets — matches desktop's
 /// `msg.body.slice(0, 100)`.
@@ -112,6 +114,7 @@ void showMessageActions({
                     // Triage: come back to this message later.
                     _MarkReadUnreadTile(message: message, channelId: channelId),
                     _FollowThreadTile(message: message),
+                    _BookmarkThreadTile(message: message, channelId: channelId),
                     const SheetDivider(),
                     // Export: take the content out of the conversation.
                     ListTile(

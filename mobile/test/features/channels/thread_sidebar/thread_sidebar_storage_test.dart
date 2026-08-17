@@ -20,7 +20,7 @@ void main() {
     );
   });
 
-  test('round-trips the local inactivity preference', () async {
+  test('round-trips inactivity and local bookmarks', () async {
     final storage = ThreadSidebarStorage(await _prefs());
     const key = 'scope';
     await storage.write(
@@ -30,6 +30,7 @@ void main() {
           'general': ChannelThreadSidebarPreference(
             inactivity: ThreadSidebarInactivity.sevenDays,
             updatedAt: 12,
+            bookmarks: {'root-1': ThreadBookmark(updatedAt: 11)},
           ),
         },
       ),
@@ -38,6 +39,8 @@ void main() {
     final stored = storage.read(key).forChannel('general');
     expect(stored.inactivity, ThreadSidebarInactivity.sevenDays);
     expect(stored.updatedAt, 12);
+    expect(stored.bookmarks.keys, ['root-1']);
+    expect(stored.bookmarks['root-1']!.updatedAt, 11);
   });
 
   test('fails closed for malformed preference payloads', () async {

@@ -2,6 +2,35 @@ use tauri::State;
 
 use crate::{app_state::AppState, models::ChannelPageCursor, relay::query_relay};
 
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveThreadCursor {
+    pub latest_activity_at: i64,
+    pub root_id: String,
+}
+
+fn build_active_threads_filter(
+    channel_id: &str,
+    active_since: Option<i64>,
+    limit: u32,
+    cursor: Option<&ActiveThreadCursor>,
+) -> serde_json::Value {
+    let mut filter = serde_json::json!({
+        "kinds": TIMELINE_KINDS,
+        "#h": [channel_id],
+        "limit": limit.clamp(1, 200),
+        "thread_roots_by_activity": true,
+    });
+    if let Some(value) = active_since {
+        filter["thread_active_since"] = value.into();
+    }
+    if let Some(value) = cursor {
+        filter["thread_activity_cursor"] = value.latest_activity_at.into();
+        filter["thread_activity_cursor_id"] = value.root_id.clone().into();
+    }
+    filter
+}
+
 const TIMELINE_KINDS: [u32; 11] = [
     9,
     40002,
@@ -53,4 +82,46 @@ pub async fn get_channel_window(
         .iter()
         .filter_map(|event| serde_json::to_value(event).ok())
         .collect())
+}
+
+#[tauri::command]
+pub async fn get_active_threads(
+    channel_id: String,
+    active_since: Option<i64>,
+    limit_rows: Option<u32>,
+    cursor: Option<ActiveThreadCursor>,
+    state: State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let filter = build_active_threads_filter(
+        &channel_id,
+        active_since,
+        limit_rows.unwrap_or(50),
+        cursor.as_ref(),
+    );
+    Ok(query_relay(&state, &[filter])
+        .await?
+        .iter()
+        .filter_map(|event| serde_json::to_value(event).ok())
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_thread_filter_carries_authoritative_bounds() {
+        let filter = build_active_threads_filter(
+            "channel",
+            Some(100),
+            50,
+            Some(&ActiveThreadCursor {
+                latest_activity_at: 200,
+                root_id: "01".repeat(32),
+            }),
+        );
+        assert_eq!(filter["thread_roots_by_activity"], true);
+        assert_eq!(filter["thread_active_since"], 100);
+        assert_eq!(filter["thread_activity_cursor"], 200);
+    }
 }

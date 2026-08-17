@@ -17,6 +17,7 @@ export function activeThreadsQueryKey(
   scope: ThreadSidebarScope,
   channelId: string,
   inactivity: ThreadSidebarInactivity,
+  includedRootIds: string[],
 ) {
   return [
     "sidebar-active-threads",
@@ -25,19 +26,22 @@ export function activeThreadsQueryKey(
     scope.communityId.toLowerCase(),
     channelId,
     inactivity,
+    ...includedRootIds.map((rootId) => rootId.toLowerCase()).sort(),
   ] as const;
 }
 
 export function shouldQuerySidebarChannel(
   selectedChannelId: string | null | undefined,
   candidateChannelId: string,
+  hasBookmarks = false,
 ): boolean {
-  return selectedChannelId === candidateChannelId;
+  return selectedChannelId === candidateChannelId || hasBookmarks;
 }
 
 type PageRequest = {
   channelId: string;
   activeSince: number | null;
+  includedRootIds: string[];
   cursor: ActiveThreadCursor | null;
   limitRows: number;
 };
@@ -55,6 +59,7 @@ function throwIfAborted(signal?: AbortSignal) {
 export async function fetchActiveThreadsPage({
   channelId,
   activeSince,
+  includedRootIds,
   cursor,
   signal,
   requestPage = async (request) => {
@@ -66,6 +71,7 @@ export async function fetchActiveThreadsPage({
   const page = await requestPage({
     channelId,
     activeSince,
+    includedRootIds,
     cursor,
     limitRows: ACTIVE_THREAD_PAGE_SIZE,
   });

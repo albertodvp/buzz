@@ -5074,6 +5074,7 @@ async function handleGetActiveThreads(
     activeSince?: number | null;
     limitRows?: number | null;
     cursor?: { latestActivityAt: number; rootId: string } | null;
+    includedRootIds?: string[];
   },
   config: E2eConfig | undefined,
 ): Promise<RelayEvent[]> {
@@ -5085,6 +5086,7 @@ async function handleGetActiveThreads(
       kinds: [...TIMELINE_KINDS],
       limit: cap,
       thread_roots_by_activity: true,
+      include_thread_roots: args.includedRootIds ?? [],
     };
     if (args.activeSince !== null && args.activeSince !== undefined) {
       filter.thread_active_since = args.activeSince;
@@ -5096,12 +5098,14 @@ async function handleGetActiveThreads(
     return relayQuery(config, [filter]);
   }
 
+  const included = new Set(args.includedRootIds ?? []);
   const ordered = [...(seeded ?? [])]
     .filter(
       (row) =>
         args.activeSince === null ||
         args.activeSince === undefined ||
-        row.latestActivityAt >= args.activeSince,
+        row.latestActivityAt >= args.activeSince ||
+        included.has(row.rootId),
     )
     .sort(
       (left, right) =>

@@ -14,12 +14,14 @@ fn build_active_threads_filter(
     active_since: Option<i64>,
     limit: u32,
     cursor: Option<&ActiveThreadCursor>,
+    included_root_ids: &[String],
 ) -> serde_json::Value {
     let mut filter = serde_json::json!({
         "kinds": TIMELINE_KINDS,
         "#h": [channel_id],
         "limit": limit.clamp(1, 200),
         "thread_roots_by_activity": true,
+        "include_thread_roots": included_root_ids,
     });
     if let Some(value) = active_since {
         filter["thread_active_since"] = value.into();
@@ -90,6 +92,7 @@ pub async fn get_active_threads(
     active_since: Option<i64>,
     limit_rows: Option<u32>,
     cursor: Option<ActiveThreadCursor>,
+    included_root_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let filter = build_active_threads_filter(
@@ -97,6 +100,7 @@ pub async fn get_active_threads(
         active_since,
         limit_rows.unwrap_or(50),
         cursor.as_ref(),
+        &included_root_ids,
     );
     Ok(query_relay(&state, &[filter])
         .await?
@@ -110,7 +114,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn active_thread_filter_carries_authoritative_bounds() {
+    fn active_thread_filter_carries_authoritative_bounds_and_pins() {
         let filter = build_active_threads_filter(
             "channel",
             Some(100),
@@ -119,9 +123,17 @@ mod tests {
                 latest_activity_at: 200,
                 root_id: "01".repeat(32),
             }),
+            &["02".repeat(32)],
         );
         assert_eq!(filter["thread_roots_by_activity"], true);
         assert_eq!(filter["thread_active_since"], 100);
         assert_eq!(filter["thread_activity_cursor"], 200);
+        assert_eq!(
+            filter["include_thread_roots"]
+                .as_array()
+                .expect("pins")
+                .len(),
+            1
+        );
     }
 }

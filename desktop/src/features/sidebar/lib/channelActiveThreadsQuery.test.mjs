@@ -14,7 +14,7 @@ const scope = {
 };
 
 test("query keys fence scope and channel but remain stable as wall time advances", () => {
-  const key = activeThreadsQueryKey(scope, "channel-1", "3d");
+  const key = activeThreadsQueryKey(scope, "channel-1", "3d", ["PIN"]);
   assert.deepEqual(key, [
     "sidebar-active-threads",
     "wss://relay.example",
@@ -22,8 +22,12 @@ test("query keys fence scope and channel but remain stable as wall time advances
     "community",
     "channel-1",
     "3d",
+    "pin",
   ]);
-  assert.deepEqual(activeThreadsQueryKey(scope, "channel-1", "3d"), key);
+  assert.deepEqual(
+    activeThreadsQueryKey(scope, "channel-1", "3d", ["PIN"]),
+    key,
+  );
 });
 
 test("one query invocation fetches exactly one bounded server page", async () => {
@@ -53,6 +57,7 @@ test("one query invocation fetches exactly one bounded server page", async () =>
   const page = await fetchActiveThreadsPage({
     channelId: "channel-1",
     activeSince: 0,
+    includedRootIds: [],
     cursor: null,
     requestPage,
   });
@@ -67,6 +72,7 @@ test("bounded page fetch ignores completion after identity cancellation", async 
   const pending = fetchActiveThreadsPage({
     channelId: "channel-1",
     activeSince: 0,
+    includedRootIds: [],
     cursor: null,
     signal: controller.signal,
     requestPage: async () => {
@@ -81,4 +87,9 @@ test("sidebar query budget enables only the selected channel", () => {
   assert.equal(shouldQuerySidebarChannel("channel-1", "channel-1"), true);
   assert.equal(shouldQuerySidebarChannel("channel-1", "channel-2"), false);
   assert.equal(shouldQuerySidebarChannel(null, "channel-1"), false);
+  assert.equal(
+    shouldQuerySidebarChannel(null, "channel-1", true),
+    true,
+    "bookmarked channels hydrate even when no channel route is selected",
+  );
 });

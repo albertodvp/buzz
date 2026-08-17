@@ -17,12 +17,13 @@ const { getChannelActiveThreadEvents } = await import(
 
 afterEach(() => calls.splice(0));
 
-test("active thread API forwards the authoritative bounds and composite cursor", async () => {
+test("active thread API forwards the authoritative bounds, pins, and composite cursor", async () => {
   await getChannelActiveThreadEvents({
     channelId: "channel-1",
     activeSince: 123,
     limitRows: 40,
     cursor: { latestActivityAt: 456, rootId: "ab".repeat(32) },
+    includedRootIds: ["cd".repeat(32)],
   });
 
   assert.deepEqual(calls, [
@@ -33,6 +34,7 @@ test("active thread API forwards the authoritative bounds and composite cursor",
         activeSince: 123,
         limitRows: 40,
         cursor: { latestActivityAt: 456, rootId: "ab".repeat(32) },
+        includedRootIds: ["cd".repeat(32)],
       },
     },
   ]);
@@ -42,6 +44,7 @@ test("active thread API preserves Never as a null cutoff and head cursor", async
   await getChannelActiveThreadEvents({
     channelId: "channel-1",
     activeSince: null,
+    includedRootIds: [],
   });
 
   assert.equal(calls[0].args.activeSince, null);

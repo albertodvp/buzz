@@ -8,7 +8,7 @@ import {
   THREAD_INACTIVITY_OPTIONS,
 } from "./SidebarThreadRow.tsx";
 
-test("thread row is compact, labelled, selected and exposes unread state", () => {
+test("thread row is compact, labelled, selected and exposes bookmark state", () => {
   const html = renderToStaticMarkup(
     React.createElement(SidebarThreadRow, {
       thread: {
@@ -17,18 +17,22 @@ test("thread row is compact, labelled, selected and exposes unread state", () =>
         label: "Meaningful thread",
         latestActivityAt: 100,
         latestReplyAt: 100,
+        pinned: true,
       },
       selected: true,
       unread: true,
       onNavigate() {},
+      onTogglePin() {},
     }),
   );
   assert.match(html, /aria-current="page"/);
   assert.match(html, /data-active="true"/);
   assert.match(html, /data-unread="true"/);
   assert.match(html, /Meaningful thread/);
+  assert.match(html, /data-testid="sidebar-thread-bookmark"/);
   assert.match(html, /data-testid="sidebar-thread-unread"/);
   assert.match(html, /Unread replies/);
+  assert.match(html, /fill-current/);
   assert.match(html, /data-testid="sidebar-thread-root-1"/);
 });
 
@@ -41,6 +45,7 @@ test("inactivity selector exposes every accepted option with the 3 day default l
       ["7d", "7 days"],
       ["30d", "30 days"],
       ["never", "Never"],
+      ["pinned-only", "Only bookmarks"],
     ],
   );
 });

@@ -1,7 +1,13 @@
-import { MessageSquareText } from "lucide-react";
+import { Bookmark, BookmarkX, MessageSquareText } from "lucide-react";
 
 import type { ProjectedSidebarThread } from "@/features/sidebar/lib/threadSidebarProjection";
 import type { ThreadSidebarInactivity } from "@/features/sidebar/lib/threadSidebarPreferencesStorage";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/shared/ui/context-menu";
 import { cn } from "@/shared/lib/cn";
 
 export const THREAD_INACTIVITY_OPTIONS: Array<{
@@ -13,6 +19,7 @@ export const THREAD_INACTIVITY_OPTIONS: Array<{
   { value: "7d", label: "7 days" },
   { value: "30d", label: "30 days" },
   { value: "never", label: "Never" },
+  { value: "pinned-only", label: "Only bookmarks" },
 ];
 
 export function SidebarThreadRow({
@@ -20,13 +27,15 @@ export function SidebarThreadRow({
   selected,
   unread,
   onNavigate,
+  onTogglePin,
 }: {
   thread: ProjectedSidebarThread;
   selected: boolean;
   unread: boolean;
   onNavigate: () => void;
+  onTogglePin: () => void;
 }) {
-  return (
+  const button = (
     <button
       aria-current={selected ? "page" : undefined}
       className={cn(
@@ -56,6 +65,33 @@ export function SidebarThreadRow({
           title="Unread replies"
         />
       ) : null}
+      {thread.pinned ? (
+        <span
+          aria-label="Bookmarked thread"
+          className="flex size-4 shrink-0 items-center justify-center text-sidebar-foreground"
+          data-testid="sidebar-thread-bookmark"
+          role="img"
+          title="Bookmarked thread"
+        >
+          <Bookmark aria-hidden="true" className="size-3.5 fill-current" />
+        </span>
+      ) : null}
     </button>
+  );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{button}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={onTogglePin}>
+          {thread.pinned ? (
+            <BookmarkX className="size-4" />
+          ) : (
+            <Bookmark className="size-4" />
+          )}
+          {thread.pinned ? "Remove bookmark" : "Bookmark thread"}
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

@@ -1,6 +1,8 @@
 import {
   BellOff,
   BellRing,
+  Bookmark,
+  BookmarkX,
   Clock,
   Copy,
   CornerUpLeft,
@@ -49,6 +51,7 @@ import {
 import { isPositiveEmojiParticle } from "@/shared/ui/EmojiBurstProvider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { useCanonicalThreadPin } from "@/features/sidebar/lib/useChannelSidebarThreads";
 
 const ACTION_BUTTON_CLASS = "h-8 w-8 rounded-full p-0";
 const ACTION_ICON_CLASS = "!h-4 !w-4";
@@ -65,9 +68,11 @@ function MoreActionsMenu({
   onRemindLater,
   onSendToChannel,
   onUnfollowThread,
+  onToggleThreadPin,
   open,
   isFollowingThread,
   isUnread,
+  isThreadPinned,
 }: {
   /** Channel UUID for the "Copy link" action. When null/undefined, the
    *  Copy link entry is hidden (e.g. inbox preview rows that don't have it). */
@@ -82,9 +87,11 @@ function MoreActionsMenu({
   onRemindLater?: (message: TimelineMessage) => void;
   onSendToChannel?: (message: TimelineMessage) => Promise<void>;
   onUnfollowThread?: (message: TimelineMessage) => void;
+  onToggleThreadPin?: () => void;
   open: boolean;
   isFollowingThread?: boolean;
   isUnread?: boolean;
+  isThreadPinned?: boolean;
 }) {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
   const [isReportDialogOpen, setIsReportDialogOpen] = React.useState(false);
@@ -189,6 +196,20 @@ function MoreActionsMenu({
                 <BellRing className="h-4 w-4" />
               )}
               {isFollowingThread ? "Unfollow thread" : "Follow thread"}
+            </DropdownMenuItem>
+          ) : null}
+
+          {onToggleThreadPin ? (
+            <DropdownMenuItem
+              data-testid={`bookmark-thread-${message.id}`}
+              onClick={onToggleThreadPin}
+            >
+              {isThreadPinned ? (
+                <BookmarkX className="h-4 w-4" />
+              ) : (
+                <Bookmark className="h-4 w-4" />
+              )}
+              {isThreadPinned ? "Remove bookmark" : "Bookmark thread"}
             </DropdownMenuItem>
           ) : null}
 
@@ -406,6 +427,7 @@ export const MessageActionBar = React.memo(function MessageActionBar({
   const [isDropdownOpen, setIsDropdownOpen] = React.useState(false);
   const customEmoji = useCustomEmoji();
   const quickReactionEmojis = useQuickReactionEmojis(4, customEmoji);
+  const threadPin = useCanonicalThreadPin(channelId, message);
   const quickReactionItems = React.useMemo(
     () =>
       quickReactionEmojis
@@ -579,9 +601,13 @@ export const MessageActionBar = React.memo(function MessageActionBar({
               onRemindLater={onRemindLater}
               onSendToChannel={onSendToChannel}
               onUnfollowThread={onUnfollowThread}
+              onToggleThreadPin={
+                threadPin.available ? threadPin.toggle : undefined
+              }
               open={isDropdownOpen}
               isFollowingThread={isFollowingThread}
               isUnread={isUnread}
+              isThreadPinned={threadPin.pinned}
             />
           ) : null}
         </div>

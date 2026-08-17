@@ -1,11 +1,15 @@
 import * as React from "react";
 
-import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
+import type {
+  MainTimelineEntry,
+  TimelineThreadSummary,
+} from "@/features/messages/lib/threadPanel";
 import { THREAD_REPLY_ROW_MARGIN_INLINE_REM } from "@/features/messages/lib/threadTreeLayout";
 import type { buildVideoReviewContextForMessage } from "@/features/messages/lib/videoReviewContext";
 import { canManageMessageForCurrentUser } from "@/features/messages/lib/canManageMessage";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { useCanonicalThreadPin } from "@/features/sidebar/lib/useChannelSidebarThreads";
 import { cn } from "@/shared/lib/cn";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
@@ -16,6 +20,35 @@ type ToggleReaction = (
   emoji: string,
   remove: boolean,
 ) => Promise<void>;
+
+function MainTimelineThreadSummary({
+  channelId,
+  message,
+  onOpenThread,
+  summary,
+  unreadCount,
+}: {
+  channelId?: string | null;
+  message: TimelineMessage;
+  onOpenThread: (message: TimelineMessage) => void;
+  summary: TimelineThreadSummary;
+  unreadCount?: number;
+}) {
+  const threadPin = useCanonicalThreadPin(channelId, message);
+
+  return (
+    <MessageThreadSummaryRow
+      depth={message.depth}
+      message={message}
+      onOpenThread={onOpenThread}
+      pinned={threadPin.pinned}
+      showDepthGuides={false}
+      summary={summary}
+      summaryIndentOffsetRem={-THREAD_REPLY_ROW_MARGIN_INLINE_REM}
+      unreadCount={unreadCount}
+    />
+  );
+}
 
 type SystemRowProps = {
   currentPubkey?: string;
@@ -176,13 +209,11 @@ export function MessageRowItem({
           showDepthGuides={false}
           videoReviewContext={videoReviewContext}
         />
-        <MessageThreadSummaryRow
-          depth={message.depth}
+        <MainTimelineThreadSummary
+          channelId={channelId}
           message={message}
           onOpenThread={onOpenThread}
-          showDepthGuides={false}
           summary={summary}
-          summaryIndentOffsetRem={-THREAD_REPLY_ROW_MARGIN_INLINE_REM}
           unreadCount={threadUnreadCounts?.get(message.id)}
         />
         {footer}

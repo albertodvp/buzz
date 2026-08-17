@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Bookmark } from "lucide-react";
 
 import type {
   TimelineThreadSummary,
@@ -63,6 +64,7 @@ export function MessageThreadSummaryRow({
   onCollapseDepthGuide,
   onCollapseDepthGuideHoverChange,
   onOpenThread,
+  pinned = false,
   showDepthGuides = true,
   summary,
   summaryIndentOffsetRem = 0,
@@ -79,6 +81,7 @@ export function MessageThreadSummaryRow({
     hovered: boolean,
   ) => void;
   onOpenThread: (message: TimelineMessage) => void;
+  pinned?: boolean;
   showDepthGuides?: boolean;
   summary: TimelineThreadSummary;
   summaryIndentOffsetRem?: number;
@@ -95,9 +98,10 @@ export function MessageThreadSummaryRow({
     THREAD_SUMMARY_SURFACE_AVATAR_INSET_REM,
   )})`;
   const replyLabel = summary.replyCount === 1 ? "reply" : "replies";
+  const bookmarkAriaLabel = pinned ? ", bookmarked in sidebar" : "";
   const summaryAriaLabel = summary.lastReplyAt
-    ? `View thread with ${summary.replyCount} ${replyLabel}, last reply ${formatThreadSummaryLastReplyTime(summary.lastReplyAt)}`
-    : `View thread with ${summary.replyCount} ${replyLabel}`;
+    ? `View thread with ${summary.replyCount} ${replyLabel}, last reply ${formatThreadSummaryLastReplyTime(summary.lastReplyAt)}${bookmarkAriaLabel}`
+    : `View thread with ${summary.replyCount} ${replyLabel}${bookmarkAriaLabel}`;
   const guideDepths = depthGuideDepths
     ? [...depthGuideDepths]
     : Array.from({ length: Math.max(0, depth - 1) }, (_, index) => index + 1);
@@ -245,6 +249,16 @@ export function MessageThreadSummaryRow({
             <span className="font-medium transition-colors group-hover:text-foreground">
               {summary.replyCount} {replyLabel}
             </span>
+            {pinned ? (
+              <span
+                aria-hidden="true"
+                className="ml-1 inline-flex align-middle text-muted-foreground/80"
+                data-testid="message-thread-bookmarked"
+                title="Bookmarked in sidebar"
+              >
+                <Bookmark className="size-3.5 fill-current" />
+              </span>
+            ) : null}
             {unreadCount != null && unreadCount > 0 ? (
               <span className="ml-1" data-testid="thread-unread-badge">
                 ({unreadCount} new)

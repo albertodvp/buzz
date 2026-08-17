@@ -5,6 +5,7 @@ import type { ActiveThreadCursor } from "@/features/sidebar/lib/channelActiveThr
 export type ChannelActiveThreadsRequest = {
   channelId: string;
   activeSince: number | null;
+  includedRootIds: string[];
   cursor?: ActiveThreadCursor | null;
   limitRows?: number;
 };
@@ -13,6 +14,7 @@ export type ChannelActiveThreadsRequest = {
 export function getChannelActiveThreadEvents({
   channelId,
   activeSince,
+  includedRootIds,
   cursor = null,
   limitRows = 50,
 }: ChannelActiveThreadsRequest): Promise<RelayEvent[]> {
@@ -21,5 +23,6 @@ export function getChannelActiveThreadEvents({
     activeSince,
     limitRows,
     cursor,
+    includedRootIds,
   });
 }

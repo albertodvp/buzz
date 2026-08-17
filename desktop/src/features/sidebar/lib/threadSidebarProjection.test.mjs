@@ -21,24 +21,34 @@ const row = (id, activity, content = id) => ({
   latestActivityAt: activity,
   latestReplyAt: activity,
 });
-const prefs = (inactivity) => ({ inactivity, updatedAt: 0 });
+const prefs = (inactivity, pins = {}) => ({ inactivity, updatedAt: 0, pins });
+const pin = (pinned = true) => ({ pinned, updatedAt: 1 });
 
-test("finite windows include fresh rows and exclude expired rows", () => {
+test("finite windows include fresh rows, exclude expired rows, and pins override age", () => {
   const now = 10 * 86_400;
   const rows = projectThreadSidebarRows(
-    [row("fresh", now - 10), row("old", now - 4 * 86_400)],
-    prefs("3d"),
+    [row("fresh", now - 10), row("old", now - 4 * 86_400), row("pinned", 1)],
+    prefs("3d", { pinned: pin() }),
     now,
   );
   assert.deepEqual(
     rows.map((item) => item.rootId),
-    ["fresh"],
+    ["fresh", "pinned"],
   );
+  assert.equal(rows[1].pinned, true);
   assert.equal(threadSidebarCutoff("3d", now), now - 3 * 86_400);
 });
 
-test("never retains every authoritative row", () => {
+test("pinned-only excludes unpinned while never retains every authoritative row", () => {
   const input = [row("new", 300), row("old", 100)];
+  assert.deepEqual(
+    projectThreadSidebarRows(
+      input,
+      prefs("pinned-only", { old: pin() }),
+      999,
+    ).map((item) => item.rootId),
+    ["old"],
+  );
   assert.deepEqual(
     projectThreadSidebarRows(input, prefs("never"), 999).map(
       (item) => item.rootId,
@@ -47,16 +57,20 @@ test("never retains every authoritative row", () => {
   );
 });
 
-test("deduplicates and orders by shared activity", () => {
+test("deduplicates and orders by shared activity rather than pin status", () => {
   const input = [
-    row("duplicate", 100),
+    row("pinned", 100),
     row("new", 300),
-    row("duplicate", 100, "duplicate copy"),
+    row("pinned", 100, "duplicate"),
   ];
-  const result = projectThreadSidebarRows(input, prefs("never"), 999);
+  const result = projectThreadSidebarRows(
+    input,
+    prefs("never", { pinned: pin() }),
+    999,
+  );
   assert.deepEqual(
     result.map((item) => item.rootId),
-    ["new", "duplicate"],
+    ["new", "pinned"],
   );
 });
 

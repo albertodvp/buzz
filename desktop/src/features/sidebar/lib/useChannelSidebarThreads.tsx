@@ -25,11 +25,16 @@ import {
   THREAD_SIDEBAR_PREFERENCES_EVENT,
   threadSidebarPreferencesKey,
   updateChannelInactivity,
+  updateThreadPin,
   type ThreadSidebarInactivity,
   type ThreadSidebarPreferences,
   type ThreadSidebarScope,
 } from "./threadSidebarPreferencesStorage";
 import { SidebarThreadRow } from "../ui/SidebarThreadRow";
+import {
+  resolveCanonicalThreadRootId,
+  toggleCanonicalThreadPin,
+} from "./canonicalThreadPinAction";
 
 const ThreadSidebarContext = React.createContext<ThreadSidebarScope | null>(
   null,
@@ -115,27 +120,83 @@ export function useChannelThreadSidebarPreference(channelId: string) {
     },
     [channelId, scope],
   );
-  return { scope, preference, setInactivity };
+  const setPinned = React.useCallback(
+    (rootId: string, pinned: boolean) => {
+      if (scope) updateThreadPin(scope, channelId, rootId, pinned);
+    },
+    [channelId, scope],
+  );
+  return { scope, preference, setInactivity, setPinned };
+}
+
+/** Canonical message action backed exclusively by device-local sidebar state. */
+export function useCanonicalThreadPin(
+  channelId: string | null | undefined,
+  message: { id: string; tags?: string[][]; pending?: boolean },
+) {
+  const scope = React.useContext(ThreadSidebarContext);
+  const preferences = useThreadSidebarPreferences(scope);
+  const rootId = resolveCanonicalThreadRootId(message);
+  const pinned =
+    channelId !== null && channelId !== undefined
+      ? channelThreadSidebarPreference(preferences, channelId).pins[rootId]
+          ?.pinned === true
+      : false;
+  const available = Boolean(scope && channelId && !message.pending);
+  const toggle = React.useCallback(() => {
+    if (!scope || !channelId || message.pending) return false;
+    return toggleCanonicalThreadPin({
+      channelId,
+      message,
+      pinned: !pinned,
+      writeLocalPin: (localChannelId, localRootId, nextPinned) =>
+        updateThreadPin(scope, localChannelId, localRootId, nextPinned),
+    });
+  }, [channelId, message, pinned, scope]);
+  return { available, pinned, rootId, toggle };
 }
 
 export function SidebarChannelThreads({ channelId }: { channelId: string }) {
   const queryClient = useQueryClient();
   const { getThreadReadAt, markThreadRead, readStateVersion } = useAppShell();
-  const { scope, preference } = useChannelThreadSidebarPreference(channelId);
+  const { scope, preference, setPinned } =
+    useChannelThreadSidebarPreference(channelId);
   const nowMilliseconds = useNow(60_000);
   const nowSeconds = Math.floor(nowMilliseconds / 1_000);
+  const includedRootIds = React.useMemo(
+    () =>
+      Object.entries(preference.pins)
+        .filter(([, pin]) => pin.pinned)
+        .map(([rootId]) => rootId)
+        .sort(),
+    [preference.pins],
+  );
   const params = useParams({ strict: false }) as { channelId?: string };
   const enabled =
-    scope !== null && shouldQuerySidebarChannel(params.channelId, channelId);
+    scope !== null &&
+    shouldQuerySidebarChannel(
+      params.channelId,
+      channelId,
+      includedRootIds.length > 0,
+    );
   const query = useInfiniteQuery({
     queryKey: scope
-      ? activeThreadsQueryKey(scope, channelId, preference.inactivity)
+      ? activeThreadsQueryKey(
+          scope,
+          channelId,
+          preference.inactivity,
+          includedRootIds,
+        )
       : ["sidebar-active-threads", "disabled", channelId],
     queryFn: ({ signal, pageParam }) => {
       const requestedAt = Math.floor(Date.now() / 1_000);
       return fetchActiveThreadsPage({
         channelId,
-        activeSince: threadSidebarCutoff(preference.inactivity, requestedAt),
+        activeSince:
+          preference.inactivity === "pinned-only"
+            ? requestedAt + 1
+            : threadSidebarCutoff(preference.inactivity, requestedAt),
+        includedRootIds,
         cursor: pageParam,
         signal,
       });
@@ -163,6 +224,7 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
     const windowCutoff = threadSidebarCutoff(preference.inactivity, nowSeconds);
     if (windowCutoff === null) return;
     const nextExpiry = authoritativeRows
+      .filter((row) => preference.pins[row.root.id]?.pinned !== true)
       .map((row) => row.latestActivityAt - windowCutoff + 1)
       .filter((seconds) => seconds > 0)
       .sort((left, right) => left - right)[0];
@@ -174,6 +236,7 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
             scope,
             channelId,
             preference.inactivity,
+            includedRootIds,
           ),
         });
       },
@@ -184,8 +247,10 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
     authoritativeRows,
     channelId,
     enabled,
+    includedRootIds,
     nowSeconds,
     preference.inactivity,
+    preference.pins,
     queryClient.invalidateQueries,
     scope,
   ]);
@@ -254,6 +319,7 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
                 threadRootId: thread.rootId,
               });
             }}
+            onTogglePin={() => setPinned(thread.rootId, !thread.pinned)}
           />
         </li>
       ))}

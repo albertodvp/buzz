@@ -77,10 +77,10 @@ test("parses authoritative thread rows and explicit bounds in wire order", () =>
   assert.deepEqual(page.nextCursor, { latestActivityAt: 200, rootId: a });
 });
 
-test("preserves a null latest reply for roots without replies", () => {
+test("preserves a null latest reply for bookmarked roots without replies", () => {
   const id = "03".repeat(32);
   const page = parseChannelActiveThreadsResponse(
-    [root(id, "thread leaf"), summary(id, 100, null), bounds(false, null)],
+    [root(id, "bookmarked leaf"), summary(id, 100, null), bounds(false, null)],
     channelId,
     null,
   );

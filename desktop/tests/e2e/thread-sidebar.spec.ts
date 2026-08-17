@@ -31,7 +31,7 @@ async function chooseInactivity(page: Page, label: string) {
   await page.getByRole("menuitemradio", { name: label }).click();
 }
 
-test("recent thread sidebar keeps activity filtering and canonical navigation separate", async ({
+test("personal thread sidebar keeps authoritative activity, bookmarks, and canonical navigation separate", async ({
   page,
 }, testInfo) => {
   const now = Math.floor(Date.now() / 1000);
@@ -62,21 +62,44 @@ test("recent thread sidebar keeps activity filtering and canonical navigation se
   await expect(fresh).toBeVisible();
   await expect(old).toHaveCount(0);
 
+  await fresh.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Bookmark thread" }).click();
+  await expect(fresh.getByTestId("sidebar-thread-bookmark")).toBeVisible();
+
   await chooseInactivity(page, "Never");
   await expect(old).toBeVisible();
 
-  await chooseInactivity(page, "3 days");
-  await expect(old).toHaveCount(0);
+  await old.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Bookmark thread" }).click();
+  await expect(
+    old.getByRole("img", { name: "Bookmarked thread" }),
+  ).toBeVisible();
 
-  await fresh.click();
+  await chooseInactivity(page, "3 days");
+  await expect(old).toBeVisible();
+
+  // A fresh app start on Inbox still hydrates channels carrying local
+  // bookmarks, without querying every channel in the sidebar.
+  await page.goto("/");
+  const persistedFresh = page.getByTestId(`sidebar-thread-${FRESH_ROOT}`);
+  const persistedOld = page.getByTestId(`sidebar-thread-${OLD_ROOT}`);
+  await expect(
+    persistedFresh.getByTestId("sidebar-thread-bookmark"),
+  ).toBeVisible();
+  await expect(persistedOld).toBeVisible();
+  await expect(
+    persistedOld.getByTestId("sidebar-thread-bookmark"),
+  ).toBeVisible();
+
+  await persistedFresh.click();
   await expect
     .poll(() => ({
       messageId: getHashSearchParam(page, "messageId"),
       threadRootId: getHashSearchParam(page, "threadRootId"),
     }))
     .toEqual({ messageId: FRESH_ROOT, threadRootId: FRESH_ROOT });
-  await expect(fresh).toHaveAttribute("aria-current", "page");
-  await expect(fresh).toHaveAttribute("data-active", "true");
+  await expect(persistedFresh).toHaveAttribute("aria-current", "page");
+  await expect(persistedFresh).toHaveAttribute("data-active", "true");
   await expect
     .poll(() =>
       page.evaluate(() => localStorage.getItem("buzz.channels.threadViewMode")),
@@ -92,9 +115,28 @@ test("recent thread sidebar keeps activity filtering and canonical navigation se
     path: testInfo.outputPath("thread-sidebar-focus.png"),
   });
 
-  await fresh.click();
+  const threadPanel = page.getByTestId("message-thread-panel");
+  await threadPanel
+    .getByTestId("message-input")
+    .fill("Bookmarked thread summary marker");
+  await threadPanel.getByTestId("send-message").click();
+  await expect(threadPanel).toContainText("Bookmarked thread summary marker");
+
+  await persistedFresh.click();
   await expect(page.getByTestId("focus-thread-drawer-overlay")).toHaveCount(0);
-  await expect(fresh).not.toHaveAttribute("aria-current", "page");
-  await expect(fresh).not.toHaveAttribute("data-active", "true");
+  await expect(persistedFresh).not.toHaveAttribute("aria-current", "page");
+  await expect(persistedFresh).not.toHaveAttribute("data-active", "true");
   await expect.poll(() => getHashSearchParam(page, "thread")).toBeNull();
+
+  const timelineSummary = page.locator(
+    `[data-testid="message-thread-summary"][data-thread-head-id="${FRESH_ROOT}"]`,
+  );
+  await expect(
+    timelineSummary.getByTestId("message-thread-bookmarked"),
+  ).toBeVisible();
+  await expect(timelineSummary).toHaveAccessibleName(/bookmarked in sidebar/);
+  await waitForAnimations(page);
+  await timelineSummary.screenshot({
+    path: testInfo.outputPath("bookmarked-thread-summary.png"),
+  });
 });

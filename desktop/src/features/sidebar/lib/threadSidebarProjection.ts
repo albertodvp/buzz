@@ -7,10 +7,12 @@ export type ProjectedSidebarThread = {
   label: string;
   latestActivityAt: number;
   latestReplyAt: number | null;
+  pinned: boolean;
 };
 
 type ChannelPreference = {
   inactivity: ThreadSidebarInactivity;
+  pins: Record<string, { pinned: boolean }>;
 };
 
 const WINDOW_SECONDS: Partial<Record<ThreadSidebarInactivity, number>> = {
@@ -64,16 +66,20 @@ export function projectThreadSidebarRows(
 
   const projected: ProjectedSidebarThread[] = [];
   for (const row of byRoot.values()) {
+    const pinned = preference.pins[row.root.id]?.pinned === true;
     const automatic =
       preference.inactivity === "never" ||
-      (cutoff !== null && row.latestActivityAt >= cutoff);
-    if (!automatic) continue;
+      (preference.inactivity !== "pinned-only" &&
+        cutoff !== null &&
+        row.latestActivityAt >= cutoff);
+    if (!pinned && !automatic) continue;
     projected.push({
       rootId: row.root.id,
       channelId: row.root.tags.find((tag) => tag[0] === "h")?.[1] ?? null,
       label: rootLabel(row.root.content),
       latestActivityAt: row.latestActivityAt,
       latestReplyAt: row.latestReplyAt,
+      pinned,
     });
   }
   projected.sort(

@@ -1,7 +1,13 @@
 import { normalizeRelayUrl } from "@/shared/lib/normalizeRelayUrl";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 
-export type ThreadSidebarInactivity = "1d" | "3d" | "7d" | "30d" | "never";
+export type ThreadSidebarInactivity =
+  | "1d"
+  | "3d"
+  | "7d"
+  | "30d"
+  | "never"
+  | "pinned-only";
 
 export type ThreadSidebarScope = {
   relayUrl: string;
@@ -9,9 +15,11 @@ export type ThreadSidebarScope = {
   pubkey: string;
 };
 
+type PinPreference = { pinned: boolean; updatedAt: number };
 type ChannelPreference = {
   inactivity: ThreadSidebarInactivity;
   updatedAt: number;
+  pins: Record<string, PinPreference>;
 };
 export type ThreadSidebarPreferences = {
   version: 1;
@@ -25,6 +33,7 @@ export const THREAD_SIDEBAR_PREFERENCES_EVENT =
   "buzz:thread-sidebar-preferences";
 const PREFIX = "buzz-thread-sidebar-preferences.v1";
 const MAX_CHANNELS = 128;
+const MAX_PINS_PER_CHANNEL = 256;
 const MAX_ID_LENGTH = 256;
 const CHOICES = new Set<ThreadSidebarInactivity>([
   "1d",
@@ -32,6 +41,7 @@ const CHOICES = new Set<ThreadSidebarInactivity>([
   "7d",
   "30d",
   "never",
+  "pinned-only",
 ]);
 
 export function threadSidebarPreferencesKey(scope: ThreadSidebarScope): string {
@@ -70,12 +80,31 @@ export function parseThreadSidebarPreferences(
     const channel = rawChannel as Record<string, unknown>;
     if (
       !CHOICES.has(channel.inactivity as ThreadSidebarInactivity) ||
-      !finiteTimestamp(channel.updatedAt)
+      !finiteTimestamp(channel.updatedAt) ||
+      !channel.pins ||
+      typeof channel.pins !== "object"
     )
       return null;
+    const pinEntries = Object.entries(channel.pins as Record<string, unknown>);
+    if (pinEntries.length > MAX_PINS_PER_CHANNEL) return null;
+    const pins: Record<string, PinPreference> = {};
+    for (const [rootId, rawPin] of pinEntries) {
+      if (
+        !rootId ||
+        rootId.length > MAX_ID_LENGTH ||
+        !rawPin ||
+        typeof rawPin !== "object"
+      )
+        return null;
+      const pin = rawPin as Record<string, unknown>;
+      if (typeof pin.pinned !== "boolean" || !finiteTimestamp(pin.updatedAt))
+        return null;
+      pins[rootId] = { pinned: pin.pinned, updatedAt: pin.updatedAt };
+    }
     channels[channelId] = {
       inactivity: channel.inactivity as ThreadSidebarInactivity,
       updatedAt: channel.updatedAt as number,
+      pins,
     };
   }
   return { version: 1, channels };
@@ -137,7 +166,19 @@ function boundedPreferences(
   preferences: ThreadSidebarPreferences,
 ): ThreadSidebarPreferences {
   const boundedChannels = Object.fromEntries(
-    Object.entries(preferences.channels).sort(oldestFirst).slice(-MAX_CHANNELS),
+    Object.entries(preferences.channels)
+      .map(([channelId, channel]) => {
+        // False entries are device-local tombstones with no merge consumer.
+        const pins = Object.fromEntries(
+          Object.entries(channel.pins)
+            .filter(([, pin]) => pin.pinned)
+            .sort(oldestFirst)
+            .slice(-MAX_PINS_PER_CHANNEL),
+        );
+        return [channelId, { ...channel, pins }] as const;
+      })
+      .sort(oldestFirst)
+      .slice(-MAX_CHANNELS),
   );
   return { version: 1, channels: boundedChannels };
 }
@@ -151,8 +192,44 @@ function withChannel(
     preferences.channels[channelId] ?? {
       inactivity: DEFAULT_THREAD_INACTIVITY,
       updatedAt: now,
+      pins: {},
     }
   );
+}
+
+export function updateThreadPin(
+  scope: ThreadSidebarScope,
+  channelId: string,
+  rootId: string,
+  pinned: boolean,
+  storage: StorageLike = window.localStorage,
+  now = Date.now(),
+): boolean {
+  if (
+    !channelId ||
+    channelId.length > MAX_ID_LENGTH ||
+    !rootId ||
+    rootId.length > MAX_ID_LENGTH ||
+    !finiteTimestamp(now)
+  )
+    return false;
+  const current = readThreadSidebarPreferences(scope, storage);
+  const channel = withChannel(current, channelId, now);
+  const pins = { ...channel.pins };
+  if (pinned) pins[rootId] = { pinned: true, updatedAt: now };
+  else delete pins[rootId];
+  const next: ThreadSidebarPreferences = {
+    version: 1,
+    channels: {
+      ...current.channels,
+      [channelId]: {
+        ...channel,
+        updatedAt: now,
+        pins,
+      },
+    },
+  };
+  return write(scope, boundedPreferences(next), storage);
 }
 
 export function updateChannelInactivity(

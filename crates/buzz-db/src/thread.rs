@@ -127,15 +127,15 @@ fn active_threads_sql() -> &'static str {
           AND tm.depth = 0
           AND root.deleted_at IS NULL
         GROUP BY tm.event_id, root.created_at
-        HAVING COUNT(reply.id) > 0
+        HAVING COUNT(reply.id) > 0 OR tm.event_id = ANY($6)
     ), page AS (
         SELECT * FROM candidates
-        WHERE ($3::timestamptz IS NULL OR latest_activity_at >= $3)
+        WHERE ($3::timestamptz IS NULL OR latest_activity_at >= $3 OR root_id = ANY($6))
           AND ($4::timestamptz IS NULL
                OR latest_activity_at < $4
                OR (latest_activity_at = $4 AND root_id > $5))
         ORDER BY latest_activity_at DESC, root_id ASC
-        LIMIT $6
+        LIMIT $7
     )
     SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig,
            e.received_at, e.channel_id, page.root_id, page.latest_activity_at,
@@ -156,6 +156,7 @@ pub async fn get_active_threads(
     channel_id: Uuid,
     active_since: Option<DateTime<Utc>>,
     cursor: Option<(DateTime<Utc>, Vec<u8>)>,
+    included_root_ids: &[Vec<u8>],
     limit: u32,
 ) -> Result<ActiveThreadWindow> {
     let capped = limit.clamp(1, 200);
@@ -169,6 +170,7 @@ pub async fn get_active_threads(
         .bind(active_since)
         .bind(cursor_at)
         .bind(cursor_id)
+        .bind(included_root_ids)
         .bind(probe as i64)
         .fetch_all(pool)
         .await?;
@@ -1013,10 +1015,10 @@ mod tests {
     }
 
     #[test]
-    fn active_thread_query_supports_an_unbounded_inactivity_window() {
+    fn active_thread_query_supports_never_and_pinned_roots_without_client_history() {
         let sql = active_threads_sql();
         assert!(sql.contains("$3::timestamptz IS NULL"));
-        assert!(!sql.contains("root_id = ANY"));
+        assert!(sql.contains("root_id = ANY"));
         assert!(sql.contains("LIMIT"));
     }
 

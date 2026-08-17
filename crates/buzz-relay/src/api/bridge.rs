@@ -346,6 +346,28 @@ fn extract_active_thread_cursor(raw: &Value) -> ActiveThreadCursorResult {
     }
 }
 
+fn extract_included_thread_roots(raw: &Value) -> Result<Vec<Vec<u8>>, &'static str> {
+    let Some(value) = raw.get("include_thread_roots") else {
+        return Ok(Vec::new());
+    };
+    let roots = value
+        .as_array()
+        .ok_or("include_thread_roots must be an array")?;
+    if roots.len() > 256 {
+        return Err("include_thread_roots exceeds 256 entries");
+    }
+    roots
+        .iter()
+        .map(|root| {
+            let value = root.as_str().ok_or("included thread root must be hex")?;
+            if value.len() != 64 {
+                return Err("included thread root must be 64 hex characters");
+            }
+            hex::decode(value).map_err(|_| "included thread root must be hex")
+        })
+        .collect()
+}
+
 fn extract_feed_types(raw: &Value) -> Option<Vec<String>> {
     let arr = raw.get("feed_types")?.as_array()?;
     let types: Vec<String> = arr
@@ -649,6 +671,8 @@ async fn handle_active_threads_filter(
     };
     let cursor = extract_active_thread_cursor(raw)
         .map_err(|message| api_error(StatusCode::BAD_REQUEST, message))?;
+    let included = extract_included_thread_roots(raw)
+        .map_err(|message| api_error(StatusCode::BAD_REQUEST, message))?;
     let limit = filter
         .limit
         .map(|value| value as u32)
@@ -661,6 +685,7 @@ async fn handle_active_threads_filter(
             channel_id,
             active_since,
             cursor.clone(),
+            &included,
             limit,
         )
         .await
@@ -2414,16 +2439,26 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
-    fn active_thread_extensions_require_complete_cursor() {
+    fn active_thread_extensions_require_complete_cursor_and_valid_pins() {
         let valid = serde_json::json!({
             "thread_activity_cursor": 100,
-            "thread_activity_cursor_id": "01".repeat(32)
+            "thread_activity_cursor_id": "01".repeat(32),
+            "include_thread_roots": ["02".repeat(32)]
         });
         assert!(extract_active_thread_cursor(&valid)
             .expect("valid cursor")
             .is_some());
+        assert_eq!(
+            extract_included_thread_roots(&valid)
+                .expect("valid roots")
+                .len(),
+            1
+        );
+
         let half = serde_json::json!({ "thread_activity_cursor": 100 });
         assert!(extract_active_thread_cursor(&half).is_err());
+        let malformed = serde_json::json!({ "include_thread_roots": ["not-hex"] });
+        assert!(extract_included_thread_roots(&malformed).is_err());
     }
 
     fn redis_pool() -> deadpool_redis::Pool {

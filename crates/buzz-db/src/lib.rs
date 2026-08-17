@@ -3015,6 +3015,7 @@ impl Db {
         channel_id: Uuid,
         active_since: Option<DateTime<Utc>>,
         cursor: Option<(DateTime<Utc>, Vec<u8>)>,
+        included_root_ids: &[Vec<u8>],
         limit: u32,
     ) -> Result<thread::ActiveThreadWindow> {
         thread::get_active_threads(
@@ -3023,6 +3024,7 @@ impl Db {
             channel_id,
             active_since,
             cursor,
+            included_root_ids,
             limit,
         )
         .await

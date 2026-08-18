@@ -197,7 +197,6 @@ test("recent thread sidebar keeps activity filtering and canonical navigation se
   await expect(fresh).not.toHaveAttribute("data-active", "true");
   await expect.poll(() => getHashSearchParam(page, "thread")).toBeNull();
 });
-
 test("recent thread unread dots clear only when that thread is opened", async ({
   page,
 }) => {
@@ -288,4 +287,32 @@ test("recent thread unread dots clear only when that thread is opened", async ({
   await expect(unreadThread.getByTestId("sidebar-thread-unread")).toHaveCount(
     0,
   );
+});
+test("right-clicking a recent thread does not open the channel menu", async ({
+  page,
+}) => {
+  const now = Math.floor(Date.now() / 1000);
+  await installMockBridge(page, {
+    activeThreads: {
+      [GENERAL_CHANNEL_ID]: [
+        {
+          rootId: FRESH_ROOT,
+          content: "Fresh release discussion",
+          latestActivityAt: now - 60,
+        },
+      ],
+    },
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+
+  const fresh = page.getByTestId(`sidebar-thread-${FRESH_ROOT}`);
+  await expect(fresh).toBeVisible();
+  await fresh.click({ button: "right" });
+
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(
+    page.getByText("Hide threads after inactivity", { exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("focus-thread-drawer-overlay")).toHaveCount(0);
 });

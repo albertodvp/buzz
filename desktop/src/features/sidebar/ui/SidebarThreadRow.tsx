@@ -37,6 +37,7 @@ export function SidebarThreadRow({
       data-unread={unread}
       data-testid={`sidebar-thread-${thread.rootId}`}
       onClick={onNavigate}
+      onContextMenu={(event) => event.preventDefault()}
       title={thread.label}
       type="button"
     >

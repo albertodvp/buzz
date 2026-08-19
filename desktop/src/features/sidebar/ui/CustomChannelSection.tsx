@@ -42,6 +42,7 @@ import {
   SidebarMenuItem,
 } from "@/shared/ui/sidebar";
 import { ChannelMenuButton } from "@/features/sidebar/ui/SidebarSection";
+import { SidebarChannelThreads } from "@/features/sidebar/lib/useChannelSidebarThreads";
 import { ChannelContextMenuItems } from "@/features/sidebar/ui/ChannelContextMenu";
 import { deferMenuAction } from "@/features/sidebar/ui/sidebarMenuHelpers";
 import {
@@ -461,6 +462,9 @@ export function ChannelGroupSection({
                     onSelectChannel={onSelectChannel}
                   />
                 )}
+                {channel.channelType === "stream" ? (
+                  <SidebarChannelThreads channelId={channel.id} />
+                ) : null}
               </SidebarMenuItem>
             </ContextMenuTrigger>
             <ContextMenuContent>

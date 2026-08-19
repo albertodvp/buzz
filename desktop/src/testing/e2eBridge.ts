@@ -367,6 +367,17 @@ type E2eConfig = {
      *  deliver live reply/aux events while an older response is in flight. */
     threadRepliesDelayMs?: number;
     usersBatchDelayMs?: number;
+    /** Authoritative thread roots returned by get_active_threads, keyed by channel id. */
+    activeThreads?: Record<
+      string,
+      Array<{
+        rootId: string;
+        content: string;
+        kind?: number;
+        latestActivityAt: number;
+        createdAt?: number;
+      }>
+    >;
     /** Delay (ms) applied to continuation channel-window requests so e2e
      *  tests can observe the in-flight prepend window. 0/undefined = instant. */
     channelWindowDelayMs?: number;
@@ -5408,6 +5419,107 @@ function buildMockChannelWindowBounds(
     content: JSON.stringify({ has_more: hasMore, next_cursor: nextCursor }),
     sig: "mocksig".repeat(20).slice(0, 128),
   };
+}
+
+async function handleGetActiveThreads(
+  args: {
+    channelId: string;
+    activeSince?: number | null;
+    limitRows?: number | null;
+    cursor?: { latestActivityAt: number; rootId: string } | null;
+  },
+  config: E2eConfig | undefined,
+): Promise<RelayEvent[]> {
+  const cap = Math.min(args.limitRows ?? 50, 200);
+  const seeded = config?.mock?.activeThreads?.[args.channelId];
+  if (!seeded && getIdentity(config)) {
+    const filter: Record<string, unknown> = {
+      "#h": [args.channelId],
+      kinds: [...TIMELINE_KINDS],
+      limit: cap,
+      thread_roots_by_activity: true,
+    };
+    if (args.activeSince !== null && args.activeSince !== undefined) {
+      filter.thread_active_since = args.activeSince;
+    }
+    if (args.cursor) {
+      filter.thread_activity_cursor = args.cursor.latestActivityAt;
+      filter.thread_activity_cursor_id = args.cursor.rootId;
+    }
+    return relayQuery(config, [filter]);
+  }
+
+  const ordered = [...(seeded ?? [])]
+    .filter(
+      (row) =>
+        args.activeSince === null ||
+        args.activeSince === undefined ||
+        row.latestActivityAt >= args.activeSince,
+    )
+    .sort(
+      (left, right) =>
+        right.latestActivityAt - left.latestActivityAt ||
+        left.rootId.localeCompare(right.rootId),
+    );
+  const cursor = args.cursor;
+  const afterCursor = cursor
+    ? ordered.filter(
+        (row) =>
+          row.latestActivityAt < cursor.latestActivityAt ||
+          (row.latestActivityAt === cursor.latestActivityAt &&
+            row.rootId > cursor.rootId),
+      )
+    : ordered;
+  const retained = afterCursor.slice(0, cap);
+  const hasMore = afterCursor.length > cap;
+  const last = retained[retained.length - 1];
+  const nextCursor =
+    hasMore && last
+      ? { latest_activity_at: last.latestActivityAt, id: last.rootId }
+      : null;
+  const rows = retained.flatMap((row): RelayEvent[] => [
+    {
+      id: row.rootId,
+      pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+      created_at: row.createdAt ?? row.latestActivityAt,
+      kind: row.kind ?? 9,
+      tags: [["h", args.channelId]],
+      content: row.content,
+      sig: "mocksig".repeat(20).slice(0, 128),
+    },
+    {
+      id: `mock-active-summary-${row.rootId}`,
+      pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+      created_at: row.latestActivityAt,
+      kind: KIND_CHANNEL_THREAD_SUMMARY,
+      tags: [
+        ["e", row.rootId],
+        ["d", row.rootId],
+        ["h", args.channelId],
+      ],
+      content: JSON.stringify({
+        last_reply_at: row.latestActivityAt,
+        latest_activity_at: row.latestActivityAt,
+      }),
+      sig: "mocksig".repeat(20).slice(0, 128),
+    },
+  ]);
+  const suffix = args.cursor
+    ? `${args.cursor.latestActivityAt}:${args.cursor.rootId.toLowerCase()}`
+    : "head";
+  rows.push({
+    id: `mock-active-bounds-${args.channelId}-${suffix}`,
+    pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    kind: KIND_CHANNEL_WINDOW_BOUNDS,
+    tags: [
+      ["d", `${args.channelId}:active-threads:${suffix}`],
+      ["h", args.channelId],
+    ],
+    content: JSON.stringify({ has_more: hasMore, next_cursor: nextCursor }),
+    sig: "mocksig".repeat(20).slice(0, 128),
+  });
+  return rows;
 }
 
 /**
@@ -13413,6 +13525,11 @@ export function maybeInstallE2eTauriMocks() {
       case "get_channel_reconnect_repair":
         return handleGetChannelReconnectRepair(
           payload as Parameters<typeof handleGetChannelReconnectRepair>[0],
+          activeConfig,
+        );
+      case "get_active_threads":
+        return handleGetActiveThreads(
+          payload as Parameters<typeof handleGetActiveThreads>[0],
           activeConfig,
         );
       case "get_channel_window":

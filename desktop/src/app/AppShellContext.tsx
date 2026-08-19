@@ -30,6 +30,10 @@ type AppShellContextValue = {
   // when unknown. Backed by the single AppShell-mounted ReadStateManager so
   // every surface (sidebar, home, badges) projects from the same source.
   getChannelReadAt: (channelId: string) => number | null;
+  // The thread context's own marker, without inheriting the channel frontier.
+  // Recent-session dots use this so unrelated channel activity cannot clear
+  // a thread that the user never opened.
+  getOwnThreadReadAt: (rootId: string) => number | null;
   // Thread read frontier as unix-seconds timestamp, or null when never read.
   // Uses `thread:<rootId>` context keys in the same ReadStateManager.
   getThreadReadAt: (rootId: string, channelId?: string | null) => number | null;
@@ -49,6 +53,9 @@ type AppShellContextValue = {
   // Bump-counter that invalidates whenever the read marker changes. Include
   // in memo deps that consume getChannelReadAt.
   readStateVersion: number;
+  // False while persisted/relay read markers are still hydrating. Consumers
+  // must not infer unread from a temporary null marker before this becomes true.
+  isReadStateReady: boolean;
   // Inject the thread→channel parent resolver derived from the event graph
   // (NIP-RS hierarchical frontier). Set by the active channel surface.
   setContextParentResolver: (resolver: ContextParentResolver | null) => void;
@@ -91,12 +98,14 @@ const AppShellContext = React.createContext<AppShellContextValue>({
   openCreateChannel: () => {},
   openChannelManagement: () => {},
   getChannelReadAt: () => null,
+  getOwnThreadReadAt: () => null,
   getThreadReadAt: () => null,
   markThreadRead: () => {},
   getMessageReadAt: () => null,
   getChannelActivityItemReadAt: () => null,
   markMessageRead: () => {},
   readStateVersion: 0,
+  isReadStateReady: false,
   setContextParentResolver: () => {},
   followThread: () => {},
   unfollowThread: () => {},

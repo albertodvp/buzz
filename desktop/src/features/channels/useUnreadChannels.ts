@@ -964,6 +964,7 @@ export function useUnreadChannels(
   );
 
   return {
+    isReadStateReady,
     unreadChannelIds,
     topLevelUnreadChannelIds,
     unreadChannelCounts,

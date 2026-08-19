@@ -80,7 +80,8 @@ String threadSidebarLabel(String content) {
       .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
   if (normalized.isEmpty) return 'Media thread';
-  return normalized.length <= 80
+  final graphemes = normalized.characters;
+  return graphemes.length <= 80
       ? normalized
-      : '${normalized.substring(0, 79).trimRight()}…';
+      : '${graphemes.take(79).toString().trimRight()}…';
 }

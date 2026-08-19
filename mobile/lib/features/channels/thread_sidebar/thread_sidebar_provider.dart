@@ -11,6 +11,22 @@ import 'thread_sidebar_models.dart';
 import 'thread_sidebar_query.dart';
 import 'thread_sidebar_storage.dart';
 
+const maxThreadSidebarChannelsPerRequest = 128;
+
+List<List<T>> threadSidebarChunks<T>(List<T> values) => [
+  for (
+    var start = 0;
+    start < values.length;
+    start += maxThreadSidebarChannelsPerRequest
+  )
+    values.sublist(
+      start,
+      start + maxThreadSidebarChannelsPerRequest < values.length
+          ? start + maxThreadSidebarChannelsPerRequest
+          : values.length,
+    ),
+];
+
 class ThreadSidebarState {
   const ThreadSidebarState({
     this.isReady = false,
@@ -56,10 +72,14 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
   int _requestId = 0;
   bool _refreshScheduled = false;
   bool _refreshAfterCurrent = false;
-  void Function()? _unsubscribeLive;
+  bool _isDisposed = false;
+  final Map<String, void Function()> _liveUnsubscribers = {};
+  final Set<String> _pendingLiveChunks = {};
   String? _liveSubscriptionKey;
   int _liveSubscriptionGeneration = 0;
   Timer? _liveRefreshTimer;
+  Timer? _liveRetryTimer;
+  Timer? _expiryTimer;
 
   @override
   ThreadSidebarState build() {
@@ -125,6 +145,7 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
   }
 
   Future<void> refresh() async {
+    if (_isDisposed) return;
     final key = _storageKey;
     if (key == null) return;
     if (state.isRefreshing) {
@@ -151,27 +172,50 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
       loadingMoreChannelIds: state.loadingMoreChannelIds,
     );
     try {
-      final events = await ref.read(relaySessionProvider.notifier).queryRelay([
-        for (final channel in channels)
-          activeThreadsFilter(
-            channelId: channel.id,
-            preference: state.preferenceFor(channel.id),
-            nowSeconds: nowSeconds,
-          ),
-      ]);
-      if (generation != _generation ||
-          requestId != _requestId ||
-          key != _storageKey) {
-        return;
+      final pages = <String, ActiveThreadPage>{};
+      Object? firstError;
+      for (final chunk in threadSidebarChunks(channels)) {
+        if (_isDisposed ||
+            generation != _generation ||
+            requestId != _requestId ||
+            key != _storageKey) {
+          return;
+        }
+        try {
+          final events = await ref
+              .read(relaySessionProvider.notifier)
+              .queryRelay([
+                for (final channel in chunk)
+                  activeThreadsFilter(
+                    channelId: channel.id,
+                    preference: state.preferenceFor(channel.id),
+                    nowSeconds: nowSeconds,
+                  ),
+              ]);
+          if (_isDisposed ||
+              generation != _generation ||
+              requestId != _requestId ||
+              key != _storageKey) {
+            return;
+          }
+          pages.addAll(
+            parseActiveThreadBatch(events, chunk.map((channel) => channel.id)),
+          );
+        } catch (error) {
+          firstError ??= error;
+        }
       }
-      final pages = parseActiveThreadBatch(
-        events,
-        channels.map((channel) => channel.id),
-      );
+      if (_isDisposed) return;
+      final eligibleIds = channels.map((channel) => channel.id).toSet();
       _rowsByChannel = {
+        for (final entry in _rowsByChannel.entries)
+          if (eligibleIds.contains(entry.key)) entry.key: entry.value,
         for (final entry in pages.entries) entry.key: entry.value.rows,
       };
       _nextCursorByChannel = {
+        for (final entry in _nextCursorByChannel.entries)
+          if (eligibleIds.contains(entry.key) && !pages.containsKey(entry.key))
+            entry.key: entry.value,
         for (final entry in pages.entries) entry.key: ?entry.value.nextCursor,
       };
       state = ThreadSidebarState(
@@ -180,9 +224,12 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
         rowsByChannel: _rowsByChannel,
         nextCursorByChannel: _nextCursorByChannel,
         loadingMoreChannelIds: state.loadingMoreChannelIds,
+        error: firstError,
       );
+      _scheduleExpiry();
     } catch (error) {
-      if (generation != _generation ||
+      if (_isDisposed ||
+          generation != _generation ||
           requestId != _requestId ||
           key != _storageKey) {
         return;
@@ -196,7 +243,7 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
         error: error,
       );
     } finally {
-      if (_refreshAfterCurrent) {
+      if (!_isDisposed && _refreshAfterCurrent) {
         _refreshAfterCurrent = false;
         _scheduleRefresh();
       }
@@ -204,6 +251,7 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
   }
 
   Future<void> loadMore(String channelId) async {
+    if (_isDisposed) return;
     final key = _storageKey;
     final cursor = _nextCursorByChannel[channelId];
     if (key == null ||
@@ -232,7 +280,8 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
           cursor: cursor,
         ),
       ]);
-      if (generation != _generation ||
+      if (_isDisposed ||
+          generation != _generation ||
           key != _storageKey ||
           _nextCursorByChannel[channelId] != cursor) {
         if (generation == _generation && key == _storageKey) {
@@ -263,8 +312,11 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
         loadingMoreChannelIds: {...state.loadingMoreChannelIds}
           ..remove(channelId),
       );
+      _scheduleExpiry();
     } catch (error) {
-      if (generation != _generation || key != _storageKey) return;
+      if (_isDisposed || generation != _generation || key != _storageKey) {
+        return;
+      }
       state = ThreadSidebarState(
         isReady: state.isReady,
         preferences: state.preferences,
@@ -281,20 +333,27 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
     String channelId,
     ThreadSidebarInactivity inactivity,
   ) async {
+    if (_isDisposed) return;
     final key = _storageKey;
     final storage = _storage;
     if (key == null || storage == null) return;
     final now = DateTime.now().millisecondsSinceEpoch;
-    final preferences = ThreadSidebarPreferences(
-      channels: {
-        ...state.preferences.channels,
-        channelId: ChannelThreadSidebarPreference(
-          inactivity: inactivity,
-          updatedAt: now,
-        ),
-      },
+    final preferences = storage.normalize(
+      ThreadSidebarPreferences(
+        channels: {
+          ...state.preferences.channels,
+          channelId: ChannelThreadSidebarPreference(
+            inactivity: inactivity,
+            updatedAt: now,
+          ),
+        },
+      ),
     );
-    if (!await storage.write(key, preferences) || key != _storageKey) return;
+    if (!await storage.write(key, preferences) ||
+        _isDisposed ||
+        key != _storageKey) {
+      return;
+    }
     state = ThreadSidebarState(
       isReady: true,
       preferences: preferences,
@@ -302,14 +361,16 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
       nextCursorByChannel: state.nextCursorByChannel,
       loadingMoreChannelIds: state.loadingMoreChannelIds,
     );
+    _scheduleExpiry();
     await refresh();
   }
 
   void _scheduleRefresh() {
-    if (_refreshScheduled) return;
+    if (_isDisposed || _refreshScheduled) return;
     _refreshScheduled = true;
     Future.microtask(() async {
       _refreshScheduled = false;
+      if (_isDisposed) return;
       await refresh();
     });
   }
@@ -317,39 +378,57 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
   void _ensureLiveSubscription(List<Channel> channels) {
     final channelIds = channels.map((channel) => channel.id).toList()..sort();
     final key = '${_storageKey ?? ''}:${channelIds.join(',')}';
-    if (_liveSubscriptionKey == key) return;
-    _clearLiveSubscription();
-    _liveSubscriptionKey = key;
-    final generation = ++_liveSubscriptionGeneration;
-    Future.microtask(() async {
-      try {
-        final unsubscribe = await ref
-            .read(relaySessionProvider.notifier)
-            .subscribe(
-              NostrFilter(
-                kinds: const [
-                  ...EventKind.channelTimelineContentKinds,
-                  EventKind.deletion,
-                  EventKind.nip29DeleteEvent,
-                ],
-                tags: {'#h': channelIds},
-                since: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-                limit: 0,
-              ),
-              _handleLiveEvent,
-            );
-        if (generation != _liveSubscriptionGeneration ||
-            _liveSubscriptionKey != key) {
-          unsubscribe();
-          return;
-        }
-        _unsubscribeLive = unsubscribe;
-      } catch (error) {
-        if (generation != _liveSubscriptionGeneration) return;
-        _liveSubscriptionKey = null;
-        debugPrint('[ThreadSidebarNotifier] live subscription failed: $error');
+    if (_liveSubscriptionKey != key) {
+      _clearLiveSubscription();
+      _liveSubscriptionKey = key;
+    }
+    final generation = _liveSubscriptionGeneration;
+    for (final chunk in threadSidebarChunks(channelIds)) {
+      final chunkKey = chunk.join(',');
+      if (_liveUnsubscribers.containsKey(chunkKey) ||
+          !_pendingLiveChunks.add(chunkKey)) {
+        continue;
       }
-    });
+      Future.microtask(() async {
+        try {
+          final unsubscribe = await ref
+              .read(relaySessionProvider.notifier)
+              .subscribe(
+                NostrFilter(
+                  kinds: const [
+                    ...EventKind.channelTimelineContentKinds,
+                    EventKind.deletion,
+                    EventKind.nip29DeleteEvent,
+                  ],
+                  tags: {'#h': chunk},
+                  since: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                  limit: 0,
+                ),
+                _handleLiveEvent,
+              );
+          if (_isDisposed ||
+              generation != _liveSubscriptionGeneration ||
+              _liveSubscriptionKey != key) {
+            unsubscribe();
+            return;
+          }
+          _liveUnsubscribers[chunkKey] = unsubscribe;
+        } catch (error) {
+          if (_isDisposed || generation != _liveSubscriptionGeneration) return;
+          debugPrint(
+            '[ThreadSidebarNotifier] live subscription failed: $error',
+          );
+          _liveRetryTimer ??= Timer(const Duration(seconds: 1), () {
+            _liveRetryTimer = null;
+            if (!_isDisposed) _ensureLiveSubscription(_channels);
+          });
+        } finally {
+          if (generation == _liveSubscriptionGeneration) {
+            _pendingLiveChunks.remove(chunkKey);
+          }
+        }
+      });
+    }
   }
 
   void _handleLiveEvent(NostrEvent event) {
@@ -377,15 +456,67 @@ class ThreadSidebarNotifier extends Notifier<ThreadSidebarState> {
 
   void _clearLiveSubscription() {
     _liveSubscriptionGeneration++;
-    _unsubscribeLive?.call();
-    _unsubscribeLive = null;
+    for (final unsubscribe in _liveUnsubscribers.values) {
+      unsubscribe();
+    }
+    _liveUnsubscribers.clear();
+    _pendingLiveChunks.clear();
+    _liveRetryTimer?.cancel();
+    _liveRetryTimer = null;
     _liveSubscriptionKey = null;
   }
 
+  void _scheduleExpiry() {
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
+    if (_isDisposed) return;
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    int? nextExpiryAt;
+    for (final entry in _rowsByChannel.entries) {
+      final inactivity = state.preferenceFor(entry.key).inactivity;
+      final duration = switch (inactivity) {
+        ThreadSidebarInactivity.oneDay => 86400,
+        ThreadSidebarInactivity.threeDays => 3 * 86400,
+        ThreadSidebarInactivity.sevenDays => 7 * 86400,
+        ThreadSidebarInactivity.thirtyDays => 30 * 86400,
+        ThreadSidebarInactivity.never => null,
+      };
+      if (duration == null) continue;
+      for (final row in entry.value) {
+        final expiresAt = row.latestActivityAt + duration + 1;
+        if (expiresAt <= nowSeconds) continue;
+        if (nextExpiryAt == null || expiresAt < nextExpiryAt) {
+          nextExpiryAt = expiresAt;
+        }
+      }
+    }
+    if (nextExpiryAt == null) return;
+    _expiryTimer = Timer(Duration(seconds: nextExpiryAt - nowSeconds), () {
+      if (_isDisposed) return;
+      state = ThreadSidebarState(
+        isReady: state.isReady,
+        isRefreshing: state.isRefreshing,
+        preferences: state.preferences,
+        rowsByChannel: state.rowsByChannel,
+        nextCursorByChannel: state.nextCursorByChannel,
+        loadingMoreChannelIds: state.loadingMoreChannelIds,
+        error: state.error,
+      );
+      _scheduleExpiry();
+    });
+  }
+
   void _dispose() {
+    _isDisposed = true;
+    _generation++;
+    _requestId++;
+    _refreshAfterCurrent = false;
+    _refreshScheduled = false;
     _clearLiveSubscription();
     _liveRefreshTimer?.cancel();
     _liveRefreshTimer = null;
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
   }
 }
 

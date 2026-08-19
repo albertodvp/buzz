@@ -133,22 +133,49 @@ test("rejects mismatched overlays and incomplete cursors", () => {
   );
 });
 
-test("deduplicates roots deterministically and never infers exhaustion from row count", () => {
+test("rejects duplicate roots and summaries", () => {
   const id = "01".repeat(32);
-  const page = parseChannelActiveThreadsResponse(
-    [
-      root(id, "first"),
-      summary(id, 200),
-      root(id, "duplicate"),
-      summary(id, 200),
-      bounds(false, null),
-    ],
-    channelId,
-    null,
+  assert.throws(
+    () =>
+      parseChannelActiveThreadsResponse(
+        [
+          root(id, "first"),
+          summary(id, 200),
+          root(id, "duplicate"),
+          bounds(false, null),
+        ],
+        channelId,
+        null,
+      ),
+    /duplicate root/,
   );
-  assert.equal(page.rows.length, 1);
-  assert.equal(page.rows[0].root.content, "first");
-  assert.equal(page.hasMore, false);
+  assert.throws(
+    () =>
+      parseChannelActiveThreadsResponse(
+        [
+          root(id, "root"),
+          summary(id, 200),
+          summary(id, 200),
+          bounds(false, null),
+        ],
+        channelId,
+        null,
+      ),
+    /duplicate summary/,
+  );
+});
+
+test("rejects a root without exactly one matching summary", () => {
+  const id = "01".repeat(32);
+  assert.throws(
+    () =>
+      parseChannelActiveThreadsResponse(
+        [root(id, "root"), bounds(false, null)],
+        channelId,
+        null,
+      ),
+    /no matching summary/,
+  );
 });
 
 test("rejects malformed cursor ids and unsupported timestamps", () => {

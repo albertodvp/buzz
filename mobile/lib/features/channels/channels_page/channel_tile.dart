@@ -189,6 +189,7 @@ class _ChannelTile extends ConsumerWidget {
           currentPubkey: currentPubkey,
           isMember: channel.isMember,
           isArchived: channel.isArchived,
+          knownLatestReplyAt: thread.latestReplyAt,
         ),
       ),
     );

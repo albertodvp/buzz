@@ -1211,6 +1211,12 @@ declare global {
       /** 64-hex id required for the event to be a valid reaction target. */
       id?: string;
     }) => RelayEvent;
+    __BUZZ_E2E_SET_ACTIVE_THREADS__?: (
+      channelId: string,
+      rows: NonNullable<
+        NonNullable<E2eConfig["mock"]>["activeThreads"]
+      >[string],
+    ) => void;
     /** Prepend `count` synthetic older messages to a channel's mock store so
      *  an older-history fetch has something to paginate. Mirrors how the real
      *  relay backfills history. Returns the created events. */
@@ -10901,6 +10907,11 @@ export function maybeInstallE2eTauriMocks() {
       pending,
       id,
     );
+  };
+  window.__BUZZ_E2E_SET_ACTIVE_THREADS__ = (channelId, rows) => {
+    config.mock ??= {};
+    config.mock.activeThreads ??= {};
+    config.mock.activeThreads[channelId] = structuredClone(rows);
   };
   window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__ = prependMockHistory;
   window.__BUZZ_E2E_EMIT_MOCK_TYPING__ = ({

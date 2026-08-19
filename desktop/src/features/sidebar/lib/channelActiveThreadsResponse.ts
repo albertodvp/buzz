@@ -77,7 +77,10 @@ export function parseChannelActiveThreadsResponse(
         "Active-thread root does not match the requested channel.",
       );
     }
-    if (!rootById.has(event.id)) rootById.set(event.id, event);
+    if (rootById.has(event.id)) {
+      throw new Error("Active-thread response contains a duplicate root.");
+    }
+    rootById.set(event.id, event);
   }
 
   const summaryByRoot = new Map<
@@ -106,12 +109,13 @@ export function parseChannelActiveThreadsResponse(
     ) {
       throw new Error("Active-thread summary has an invalid latest reply.");
     }
-    if (!summaryByRoot.has(rootId)) {
-      summaryByRoot.set(rootId, {
-        latestActivityAt: activity,
-        latestReplyAt: payload.last_reply_at,
-      });
+    if (summaryByRoot.has(rootId)) {
+      throw new Error("Active-thread response contains a duplicate summary.");
     }
+    summaryByRoot.set(rootId, {
+      latestActivityAt: activity,
+      latestReplyAt: payload.last_reply_at,
+    });
   }
 
   const boundsEvents = events.filter(
@@ -150,7 +154,10 @@ export function parseChannelActiveThreadsResponse(
   const rows: ActiveThreadRow[] = [];
   for (const [rootId, root] of rootById) {
     const summary = summaryByRoot.get(rootId);
-    if (summary) rows.push({ root, ...summary });
+    if (!summary) {
+      throw new Error("Active-thread root has no matching summary.");
+    }
+    rows.push({ root, ...summary });
   }
   return { rows, hasMore: bounds.has_more, nextCursor };
 }

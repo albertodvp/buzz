@@ -7,6 +7,7 @@ const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 const FRESH_ROOT = "mock-general-welcome";
 const SECOND_ROOT = "mock-general-alice";
 const OLD_ROOT = "bb".repeat(32);
+const MOCK_PUBKEY = "deadbeef".repeat(8);
 
 function getHashSearchParam(page: Page, name: string) {
   const hash = new URL(page.url()).hash.replace(/^#/, "");
@@ -32,6 +33,18 @@ async function chooseInactivity(page: Page, label: string) {
   await page.getByRole("menuitemradio", { name: label }).click();
 }
 
+async function waitForGeneralLiveSubscription(page: Page) {
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          channelName: "general",
+        }),
+      ),
+    )
+    .toBe(true);
+}
+
 test("recent threads bootstrap while Inbox is selected", async ({ page }) => {
   const now = Math.floor(Date.now() / 1000);
   await installMockBridge(page, {
@@ -47,6 +60,76 @@ test("recent threads bootstrap while Inbox is selected", async ({ page }) => {
     },
   });
   await page.goto("/");
+
+  await expect(page.getByTestId(`sidebar-thread-${FRESH_ROOT}`)).toBeVisible();
+  expect(new URL(page.url()).hash).not.toContain("/channels/");
+});
+
+test("recent threads remain visible in a custom section", async ({ page }) => {
+  const now = Math.floor(Date.now() / 1000);
+  await page.addInitScript(
+    ({ channelId, pubkey }) => {
+      localStorage.setItem(
+        `buzz-channel-sections.v1:${pubkey}`,
+        JSON.stringify({
+          version: 1,
+          sections: [{ id: "threads", name: "Thread projects", order: 0 }],
+          assignments: { [channelId]: "threads" },
+        }),
+      );
+    },
+    { channelId: GENERAL_CHANNEL_ID, pubkey: MOCK_PUBKEY },
+  );
+  await installMockBridge(page, {
+    activeThreads: {
+      [GENERAL_CHANNEL_ID]: [
+        {
+          rootId: FRESH_ROOT,
+          content: "Custom section discussion",
+          latestActivityAt: now - 60,
+        },
+      ],
+    },
+  });
+  await page.goto("/");
+
+  await expect(page.getByText("Thread projects")).toBeVisible();
+  await expect(page.getByTestId(`sidebar-thread-${FRESH_ROOT}`)).toBeVisible();
+});
+
+test("background live replies invalidate candidate thread rows", async ({
+  page,
+}) => {
+  const now = Math.floor(Date.now() / 1000);
+  await installMockBridge(page, {
+    activeThreads: { [GENERAL_CHANNEL_ID]: [] },
+  });
+  await page.goto("/");
+  await expect(page.getByTestId(`sidebar-thread-${FRESH_ROOT}`)).toHaveCount(0);
+  await waitForGeneralLiveSubscription(page);
+
+  await page.evaluate(
+    ({ channelId, rootId, latestActivityAt }) => {
+      window.__BUZZ_E2E_SET_ACTIVE_THREADS__?.(channelId, [
+        {
+          rootId,
+          content: "Background reply discussion",
+          latestActivityAt,
+        },
+      ]);
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content: "A background reply",
+        parentEventId: rootId,
+        createdAt: latestActivityAt,
+      });
+    },
+    {
+      channelId: GENERAL_CHANNEL_ID,
+      rootId: FRESH_ROOT,
+      latestActivityAt: now,
+    },
+  );
 
   await expect(page.getByTestId(`sidebar-thread-${FRESH_ROOT}`)).toBeVisible();
   expect(new URL(page.url()).hash).not.toContain("/channels/");

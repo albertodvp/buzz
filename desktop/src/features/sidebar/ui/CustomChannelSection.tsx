@@ -759,6 +759,9 @@ export function CustomChannelSection({
                                 onSelectChannel={onSelectChannel}
                               />
                             </DraggableChannelRow>
+                            {channel.channelType === "stream" ? (
+                              <SidebarChannelThreads channelId={channel.id} />
+                            ) : null}
                           </SidebarMenuItem>
                         </ContextMenuTrigger>
                         <ContextMenuContent>

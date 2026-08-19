@@ -114,13 +114,16 @@ fn active_threads_sql() -> &'static str {
           ON root.community_id = tm.community_id
          AND root.created_at = tm.event_created_at
          AND root.id = tm.event_id
+         AND root.channel_id = tm.channel_id
         LEFT JOIN thread_metadata child
           ON child.community_id = tm.community_id
          AND child.root_event_id = tm.event_id
+         AND child.channel_id = tm.channel_id
         LEFT JOIN events reply
           ON reply.community_id = child.community_id
          AND reply.created_at = child.event_created_at
          AND reply.id = child.event_id
+         AND reply.channel_id = child.channel_id
          AND reply.deleted_at IS NULL
         WHERE tm.community_id = $1
           AND tm.channel_id = $2
@@ -145,6 +148,7 @@ fn active_threads_sql() -> &'static str {
     JOIN events e
       ON e.community_id = $1
      AND e.id = page.root_id
+     AND e.channel_id = $2
      AND e.deleted_at IS NULL
     ORDER BY page.latest_activity_at DESC, page.root_id ASC
     "#
@@ -219,6 +223,61 @@ pub async fn get_active_threads(
             },
             latest_activity_at,
         });
+    }
+
+    let roots: Vec<Vec<u8>> = rows
+        .iter()
+        .map(|row| row.stored_event.event.id.as_bytes().to_vec())
+        .collect();
+    if !roots.is_empty() {
+        let participant_rows = sqlx::query(
+            r#"
+            SELECT root_event_id, pubkey FROM (
+                SELECT
+                    child.root_event_id,
+                    reply.pubkey,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY child.root_event_id
+                        ORDER BY MAX(reply.created_at) DESC, reply.pubkey ASC
+                    ) AS rn
+                FROM thread_metadata child
+                JOIN events reply
+                  ON reply.community_id = child.community_id
+                 AND reply.created_at = child.event_created_at
+                 AND reply.id = child.event_id
+                 AND reply.channel_id = child.channel_id
+                WHERE child.community_id = $1
+                  AND child.channel_id = $2
+                  AND child.root_event_id = ANY($3)
+                  AND child.depth > 0
+                  AND reply.deleted_at IS NULL
+                GROUP BY child.root_event_id, reply.pubkey
+            ) participants
+            WHERE rn <= 10
+            ORDER BY root_event_id, rn
+            "#,
+        )
+        .bind(community_id.as_uuid())
+        .bind(channel_id)
+        .bind(&roots)
+        .fetch_all(pool)
+        .await?;
+
+        let mut by_root: std::collections::HashMap<Vec<u8>, Vec<Vec<u8>>> =
+            std::collections::HashMap::new();
+        for row in participant_rows {
+            by_root
+                .entry(row.try_get("root_event_id")?)
+                .or_default()
+                .push(row.try_get("pubkey")?);
+        }
+        for row in &mut rows {
+            if let Some(participants) =
+                by_root.remove(row.stored_event.event.id.as_bytes().as_slice())
+            {
+                row.summary.participants = participants;
+            }
+        }
     }
     Ok(ActiveThreadWindow {
         rows,
@@ -1819,6 +1878,10 @@ mod tests {
         assert_eq!(first.rows.len(), 1);
         assert_eq!(first.rows[0].stored_event.event.id.to_hex(), expected[0]);
         assert_eq!(first.rows[0].summary.descendant_count, 1);
+        assert_eq!(
+            first.rows[0].summary.participants,
+            vec![author.public_key().to_bytes().to_vec()]
+        );
         assert!(first.has_more);
         let cursor = first.next_cursor.expect("first page cursor");
 
@@ -1837,6 +1900,98 @@ mod tests {
         assert_eq!(second.rows[0].stored_event.event.id.to_hex(), expected[1]);
         assert!(!second.has_more);
         assert!(second.next_cursor.is_none());
+    }
+
+    /// A forged metadata stub must never let a root from another channel enter
+    /// an active-thread result, even if legacy or out-of-band data bypassed the
+    /// relay's ancestry validation.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn active_threads_reject_cross_channel_root_metadata() {
+        use nostr::{Tag, Timestamp};
+
+        let pool = setup_pool().await;
+        let attacker = Keys::generate();
+        let victim = Keys::generate();
+        let (channel_a, community) = create_test_channel(
+            &pool,
+            &format!("active-threads-a-{}", Uuid::new_v4()),
+            ChannelType::Stream,
+            ChannelVisibility::Open,
+            None,
+            attacker.public_key().to_bytes().as_slice(),
+            None,
+        )
+        .await
+        .expect("create attacker channel");
+        let (channel_b, _) = create_test_channel(
+            &pool,
+            &format!("active-threads-b-{}", Uuid::new_v4()),
+            ChannelType::Stream,
+            ChannelVisibility::Private,
+            None,
+            victim.public_key().to_bytes().as_slice(),
+            None,
+        )
+        .await
+        .expect("create victim channel");
+
+        let base = Utc::now().timestamp() as u64 - 100;
+        let foreign_root = EventBuilder::new(Kind::Custom(9), "private root")
+            .tags([Tag::parse(["h", &channel_b.id.to_string()]).expect("channel tag")])
+            .custom_created_at(Timestamp::from(base))
+            .sign_with_keys(&victim)
+            .expect("sign foreign root");
+        insert_event_with_thread_metadata(
+            &pool,
+            community,
+            &foreign_root,
+            Some(channel_b.id),
+            None,
+        )
+        .await
+        .expect("insert foreign root without metadata");
+
+        let parent = EventBuilder::new(Kind::Custom(9), "metadata-less parent")
+            .tags([
+                Tag::parse(["h", &channel_a.id.to_string()]).expect("channel tag"),
+                Tag::parse(["e", &foreign_root.id.to_hex(), "", "root"]).expect("foreign root tag"),
+            ])
+            .custom_created_at(Timestamp::from(base + 1))
+            .sign_with_keys(&attacker)
+            .expect("sign parent");
+        insert_event_with_thread_metadata(&pool, community, &parent, Some(channel_a.id), None)
+            .await
+            .expect("insert metadata-less parent");
+
+        let forged_reply = EventBuilder::new(Kind::Custom(9), "forged nested reply")
+            .custom_created_at(Timestamp::from(base + 2))
+            .sign_with_keys(&attacker)
+            .expect("sign forged reply");
+        insert_event_with_thread_metadata(
+            &pool,
+            community,
+            &forged_reply,
+            Some(channel_a.id),
+            Some(ThreadMetadataParams {
+                event_id: forged_reply.id.as_bytes(),
+                event_created_at: event_created_at(&forged_reply),
+                channel_id: channel_a.id,
+                parent_event_id: Some(parent.id.as_bytes()),
+                parent_event_created_at: Some(event_created_at(&parent)),
+                root_event_id: Some(foreign_root.id.as_bytes()),
+                root_event_created_at: Some(event_created_at(&foreign_root)),
+                depth: 2,
+                broadcast: false,
+            }),
+        )
+        .await
+        .expect("insert forged legacy metadata");
+
+        let window = get_active_threads(&pool, community, channel_a.id, &[9], None, None, 50)
+            .await
+            .expect("query attacker channel");
+        assert!(window.rows.is_empty(), "foreign root must remain invisible");
     }
 
     /// The window's top-level predicate: roots (depth 0), events with no

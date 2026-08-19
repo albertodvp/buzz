@@ -18,6 +18,13 @@ const _root = NostrEvent(
 );
 
 void main() {
+  test('label truncation preserves grapheme clusters', () {
+    final prefix = List.filled(78, 'a').join();
+    final label = threadSidebarLabel('$prefix👩‍💻 trailing text');
+    expect(label, '$prefix👩‍💻…');
+    expect(label.contains('�'), isFalse);
+  });
+
   testWidgets(
     'renders a readable, tappable thread row with a useful touch target',
     (tester) async {

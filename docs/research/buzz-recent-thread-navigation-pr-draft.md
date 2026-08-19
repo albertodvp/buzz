@@ -24,8 +24,9 @@ message identity, reply semantics, or publishing new state.
 
 ## Validation
 
-- Database and relay tests cover root-kind pushdown, descendant activity,
-  deletion, cutoff, deterministic pagination, bounds, and authorization.
+- A required Postgres/Redis CI step runs the database and relay tests covering
+  root-kind pushdown, descendant activity, deletion, cutoff, deterministic
+  pagination, bounds, participant summaries, and cross-channel authorization.
 - Desktop unit/E2E tests cover response parsing, local preferences, filtering,
   unread state, menu spacing, selected-row paint, focus navigation, and close-on-
   second-press behavior.

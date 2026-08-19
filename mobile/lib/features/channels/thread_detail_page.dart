@@ -73,6 +73,7 @@ class ThreadDetailPage extends HookConsumerWidget {
   final bool isMember;
   final bool isArchived;
   final String? initialMessageId;
+  final int? knownLatestReplyAt;
 
   const ThreadDetailPage({
     super.key,
@@ -83,6 +84,7 @@ class ThreadDetailPage extends HookConsumerWidget {
     required this.isMember,
     required this.isArchived,
     this.initialMessageId,
+    this.knownLatestReplyAt,
   });
 
   @override
@@ -669,23 +671,45 @@ class ThreadDetailPage extends HookConsumerWidget {
         .map((reply) => '${reply.id}:${reply.createdAt}')
         .join(',');
 
-    useEffect(() {
-      if (!readState.isReady || replies.isEmpty) return null;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final notifier = ref.read(readStateProvider.notifier);
-        for (final reply in replies) {
-          notifier.markContextRead(msgContextKey(reply.id), reply.createdAt);
-        }
-        final latestReplyAt = replies
-            .map((reply) => reply.createdAt)
-            .reduce((left, right) => left > right ? left : right);
-        notifier.markContextRead(
-          threadContextKey(effectiveRootId),
-          latestReplyAt,
-        );
-      });
-      return null;
-    }, [effectiveRootId, readState.isReady, visibleReplyReadKey]);
+    useEffect(
+      () {
+        if (!readState.isReady) return null;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final notifier = ref.read(readStateProvider.notifier);
+          for (final reply in replies) {
+            notifier.markContextRead(msgContextKey(reply.id), reply.createdAt);
+          }
+          final loadedLatestReplyAt = replies.isEmpty
+              ? null
+              : replies
+                    .map((reply) => reply.createdAt)
+                    .reduce((left, right) => left > right ? left : right);
+          final latestReplyAt = switch ((
+            loadedLatestReplyAt,
+            knownLatestReplyAt,
+          )) {
+            (final int loaded, final int known) =>
+              loaded > known ? loaded : known,
+            (final int loaded, null) => loaded,
+            (null, final int known) => known,
+            (null, null) => null,
+          };
+          if (latestReplyAt != null) {
+            notifier.markContextRead(
+              threadContextKey(effectiveRootId),
+              latestReplyAt,
+            );
+          }
+        });
+        return null;
+      },
+      [
+        effectiveRootId,
+        knownLatestReplyAt,
+        readState.isReady,
+        visibleReplyReadKey,
+      ],
+    );
 
     // Thread-scoped typing indicators (exclude self).
     final allTyping = ref.watch(channelTypingProvider(channelId));

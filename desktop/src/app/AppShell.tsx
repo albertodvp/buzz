@@ -380,6 +380,7 @@ export function AppShell() {
     getEffectiveTimestamp: getChannelReadAt,
     getOwnTimestamp: getOwnReadAt,
     readStateVersion,
+    isReadStateReady,
     setContextParentResolver,
     participatedRootIds,
     authoredRootIds,
@@ -408,6 +409,7 @@ export function AppShell() {
   );
 
   const {
+    getOwnThreadReadAt,
     getThreadReadAt,
     markThreadRead,
     getMessageReadAt,
@@ -717,12 +719,14 @@ export function AppShell() {
               setIsChannelManagementOpen(true);
             },
             getChannelReadAt,
+            getOwnThreadReadAt,
             getThreadReadAt,
             markThreadRead,
             getMessageReadAt,
             getChannelActivityItemReadAt,
             markMessageRead,
             readStateVersion,
+            isReadStateReady,
             setContextParentResolver,
             followThread: handleFollowThread,
             unfollowThread: handleUnfollowThread,

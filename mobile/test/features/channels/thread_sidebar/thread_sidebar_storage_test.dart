@@ -46,4 +46,25 @@ void main() {
     );
     expect(storage.read('scope').channels, isEmpty);
   });
+
+  test(
+    'normalizes in-memory preferences to the persisted 128-channel cap',
+    () async {
+      final storage = ThreadSidebarStorage(await _prefs());
+      final normalized = storage.normalize(
+        ThreadSidebarPreferences(
+          channels: {
+            for (var index = 0; index < 129; index++)
+              'channel-$index': ChannelThreadSidebarPreference(
+                updatedAt: index,
+              ),
+          },
+        ),
+      );
+
+      expect(normalized.channels, hasLength(128));
+      expect(normalized.channels, isNot(contains('channel-0')));
+      expect(normalized.channels, contains('channel-128'));
+    },
+  );
 }

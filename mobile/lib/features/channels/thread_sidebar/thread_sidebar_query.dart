@@ -94,7 +94,16 @@ ActiveThreadPage _parseChannelPage(
         event.channelId == channelId &&
         event.getTagValue('d') == _requestKey(channelId, cursor),
   );
-  if (bounds.length != 1) {
+  if (bounds.isEmpty) {
+    if (roots.isNotEmpty || activityByRoot.isNotEmpty) {
+      throw FormatException('missing active-thread bounds for $channelId');
+    }
+    // Membership can change between the local channel snapshot and the relay
+    // query. The relay intentionally omits inaccessible channel frames; keep
+    // valid sibling pages instead of rejecting the whole batch.
+    return const ActiveThreadPage(rows: [], hasMore: false, nextCursor: null);
+  }
+  if (bounds.length > 1) {
     throw FormatException('missing active-thread bounds for $channelId');
   }
   final dynamic decodedBounds = jsonDecode(bounds.single.content);

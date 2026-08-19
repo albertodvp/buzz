@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:buzz/features/channels/thread_sidebar/thread_sidebar_models.dart';
+import 'package:buzz/features/channels/thread_sidebar/thread_sidebar_provider.dart';
 import 'package:buzz/features/channels/thread_sidebar/thread_sidebar_query.dart';
 import 'package:buzz/shared/relay/relay.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +24,15 @@ NostrEvent _event({
 );
 
 void main() {
+  test('chunks 129 channels within the relay request budget', () {
+    final chunks = threadSidebarChunks(List.generate(129, (index) => index));
+    expect(chunks.map((chunk) => chunk.length), [128, 1]);
+    expect(
+      chunks.expand((chunk) => chunk),
+      orderedEquals(List.generate(129, (index) => index)),
+    );
+  });
+
   test('builds the relay active-thread query with an activity cutoff', () {
     final filter = activeThreadsFilter(
       channelId: _channelId,
@@ -82,6 +92,15 @@ void main() {
     expect(page.rows.single.latestReplyAt, 900);
     expect(page.hasMore, isFalse);
     expect(page.nextCursor, isNull);
+  });
+
+  test('isolates a channel whose bounds frame is absent', () {
+    final pages = parseActiveThreadBatch(const [], const [
+      _channelId,
+      'membership-raced-channel',
+    ]);
+    expect(pages[_channelId]?.rows, isEmpty);
+    expect(pages['membership-raced-channel']?.hasMore, isFalse);
   });
 
   test('carries and validates the composite cursor for follow-up pages', () {

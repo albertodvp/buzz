@@ -6430,6 +6430,70 @@ void main() {
       );
     });
 
+    testWidgets('known nested activity advances the canonical read frontier', (
+      tester,
+    ) async {
+      final root = _textMsg(
+        id: 'nested-read-root',
+        pubkey: 'alice',
+        content: 'Thread root',
+        createdAt: 1000,
+      );
+      final directReply = _textMsg(
+        id: 'nested-read-direct',
+        pubkey: 'bob',
+        content: 'Direct reply',
+        createdAt: 1200,
+        extraTags: const [
+          ['e', 'nested-read-root', '', 'reply'],
+        ],
+      );
+      final readState = _SynchronousReadStateNotifier(
+        const ReadStateState(
+          isReady: true,
+          pubkey: 'self',
+          contexts: {},
+          version: 0,
+        ),
+      );
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: [root],
+          threadReplies: {
+            'nested-read-root': [directReply],
+          },
+          readStateNotifier: readState,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final threadHead = formatTimeline([root]).single;
+      Navigator.of(tester.element(find.byType(ChannelDetailPage))).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ThreadDetailPage(
+            threadHead: threadHead,
+            allMessages: [threadHead],
+            channelId: _channelId,
+            currentPubkey: 'self',
+            isMember: true,
+            isArchived: false,
+            knownLatestReplyAt: 1300,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        readState.markedContexts[threadContextKey('nested-read-root')],
+        1300,
+      );
+      expect(
+        readState.markedContexts[msgContextKey('nested-read-direct')],
+        1200,
+      );
+    });
+
     testWidgets('thread keeps its tail above a growing composer dock', (
       tester,
     ) async {

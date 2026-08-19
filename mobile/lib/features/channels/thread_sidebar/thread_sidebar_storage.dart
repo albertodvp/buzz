@@ -79,7 +79,7 @@ class ThreadSidebarStorage {
     }
   }
 
-  Future<bool> write(String key, ThreadSidebarPreferences preferences) {
+  ThreadSidebarPreferences normalize(ThreadSidebarPreferences preferences) {
     final channelEntries = preferences.channels.entries.toList()
       ..sort(
         (left, right) => left.value.updatedAt.compareTo(right.value.updatedAt),
@@ -87,12 +87,21 @@ class ThreadSidebarStorage {
     final boundedChannels = channelEntries.length <= _maxChannels
         ? channelEntries
         : channelEntries.sublist(channelEntries.length - _maxChannels);
+    return ThreadSidebarPreferences(
+      channels: {
+        for (final channel in boundedChannels) channel.key: channel.value,
+      },
+    );
+  }
+
+  Future<bool> write(String key, ThreadSidebarPreferences preferences) {
+    final normalized = normalize(preferences);
     return _prefs.setString(
       key,
       jsonEncode({
         'version': 1,
         'channels': {
-          for (final channel in boundedChannels)
+          for (final channel in normalized.channels.entries)
             channel.key: {
               'inactivity': channel.value.inactivity.storageValue,
               'updatedAt': channel.value.updatedAt,

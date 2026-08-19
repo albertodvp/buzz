@@ -3817,6 +3817,86 @@ mod tests {
         assert!(inaccessible.is_empty());
     }
 
+    /// The metadata-less-parent fallback must not accept a root from a channel
+    /// the replying principal cannot access.
+    #[tokio::test]
+    #[ignore = "requires Postgres and Redis"]
+    async fn active_threads_reject_cross_channel_root_fallback() {
+        let state = bridge_handler_test_state()
+            .await
+            .expect("local Postgres and Redis must be reachable");
+        let host = format!(
+            "active-thread-cross-{}.local",
+            uuid::Uuid::new_v4().simple()
+        );
+        let community = state
+            .db
+            .ensure_configured_community(&host)
+            .await
+            .expect("ensure test community")
+            .id;
+        let attacker = Keys::generate();
+        let victim = Keys::generate();
+        let channel_a = uuid::Uuid::new_v4();
+        let channel_b = uuid::Uuid::new_v4();
+        for (channel_id, name, owner) in [
+            (channel_a, "attacker channel", &attacker),
+            (channel_b, "victim channel", &victim),
+        ] {
+            state
+                .db
+                .create_channel_with_id(
+                    community,
+                    channel_id,
+                    name,
+                    buzz_db::channel::ChannelType::Stream,
+                    buzz_db::channel::ChannelVisibility::Private,
+                    None,
+                    owner.public_key().to_bytes().as_slice(),
+                    None,
+                )
+                .await
+                .expect("create test channel");
+        }
+
+        let foreign_root = EventBuilder::new(Kind::Custom(9), "private root")
+            .tags([Tag::parse(["h", &channel_b.to_string()]).expect("channel tag")])
+            .sign_with_keys(&victim)
+            .expect("sign foreign root");
+        state
+            .db
+            .insert_event_with_thread_metadata(community, &foreign_root, Some(channel_b), None)
+            .await
+            .expect("insert foreign root");
+        let parent = EventBuilder::new(Kind::Custom(9), "metadata-less parent")
+            .tags([
+                Tag::parse(["h", &channel_a.to_string()]).expect("channel tag"),
+                Tag::parse(["e", &foreign_root.id.to_hex(), "", "root"]).expect("foreign root tag"),
+            ])
+            .sign_with_keys(&attacker)
+            .expect("sign parent");
+        state
+            .db
+            .insert_event_with_thread_metadata(community, &parent, Some(channel_a), None)
+            .await
+            .expect("insert metadata-less parent");
+        let reply = EventBuilder::new(Kind::Custom(9), "nested reply")
+            .tags([
+                Tag::parse(["h", &channel_a.to_string()]).expect("channel tag"),
+                Tag::parse(["e", &foreign_root.id.to_hex(), "", "root"]).expect("foreign root tag"),
+                Tag::parse(["e", &parent.id.to_hex(), "", "reply"]).expect("parent tag"),
+            ])
+            .sign_with_keys(&attacker)
+            .expect("sign reply");
+
+        let error = crate::handlers::ingest::resolve_nip10_thread_meta(
+            community, &reply, channel_a, &state,
+        )
+        .await
+        .expect_err("cross-channel root must be rejected");
+        assert!(error.contains("different channel"));
+    }
+
     /// Drive a single POST /events request through the router and return the
     /// HTTP status code.
     async fn post_events(

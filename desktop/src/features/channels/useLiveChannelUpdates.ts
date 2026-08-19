@@ -5,6 +5,7 @@ import { channelsQueryKey } from "@/features/channels/hooks";
 import { updateChannelLastMessageAt } from "@/features/channels/lib/channelRecency";
 import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
 import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
+import { activeThreadsLiveInvalidationFilters } from "@/features/sidebar/lib/activeThreadsLiveInvalidation";
 import {
   getChannelIdFromTags,
   isThreadReply,
@@ -240,6 +241,14 @@ export function useLiveChannelUpdates(
         invalidateChannelsDebounced();
       }
       return;
+    }
+
+    const activeThreadsFilters = activeThreadsLiveInvalidationFilters(
+      channelId,
+      event,
+    );
+    if (activeThreadsFilters) {
+      void queryClient.invalidateQueries(activeThreadsFilters);
     }
 
     const isDmChannel = dmChannelMap.has(channelId);

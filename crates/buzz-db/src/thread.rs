@@ -79,6 +79,154 @@ pub struct ChannelWindow {
     pub next_cursor: Option<(DateTime<Utc>, Vec<u8>)>,
 }
 
+/// One canonical thread root ordered by latest non-deleted reply activity.
+#[derive(Debug, Clone)]
+pub struct ActiveThreadRow {
+    /// The canonical signed root event.
+    pub stored_event: StoredEvent,
+    /// Aggregate computed from currently visible replies.
+    pub summary: ThreadSummary,
+    /// Shared ordering timestamp.
+    pub latest_activity_at: DateTime<Utc>,
+}
+
+/// A finite keyset page of authoritative active thread roots.
+#[derive(Debug, Clone)]
+pub struct ActiveThreadWindow {
+    /// Rows in `(latest_activity_at DESC, root_id ASC)` order.
+    pub rows: Vec<ActiveThreadRow>,
+    /// True only when the internal `limit + 1` probe found another row.
+    pub has_more: bool,
+    /// Cursor of the last retained row, present exactly when `has_more`.
+    pub next_cursor: Option<(DateTime<Utc>, Vec<u8>)>,
+}
+
+fn active_threads_sql() -> &'static str {
+    r#"
+    WITH candidates AS (
+        SELECT
+            tm.event_id AS root_id,
+            COALESCE(MAX(reply.created_at), root.created_at) AS latest_activity_at,
+            COUNT(reply.id) FILTER (WHERE child.depth = 1)::int AS reply_count,
+            COUNT(reply.id)::int AS descendant_count
+        FROM thread_metadata tm
+        JOIN events root
+          ON root.community_id = tm.community_id
+         AND root.created_at = tm.event_created_at
+         AND root.id = tm.event_id
+        LEFT JOIN thread_metadata child
+          ON child.community_id = tm.community_id
+         AND child.root_event_id = tm.event_id
+        LEFT JOIN events reply
+          ON reply.community_id = child.community_id
+         AND reply.created_at = child.event_created_at
+         AND reply.id = child.event_id
+         AND reply.deleted_at IS NULL
+        WHERE tm.community_id = $1
+          AND tm.channel_id = $2
+          AND root.kind = ANY($3::int[])
+          AND tm.depth = 0
+          AND root.deleted_at IS NULL
+        GROUP BY tm.event_id, root.created_at
+        HAVING COUNT(reply.id) > 0
+    ), page AS (
+        SELECT * FROM candidates
+        WHERE ($4::timestamptz IS NULL OR latest_activity_at >= $4)
+          AND ($5::timestamptz IS NULL
+               OR latest_activity_at < $5
+               OR (latest_activity_at = $5 AND root_id > $6))
+        ORDER BY latest_activity_at DESC, root_id ASC
+        LIMIT $7
+    )
+    SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig,
+           e.received_at, e.channel_id, page.root_id, page.latest_activity_at,
+           page.reply_count, page.descendant_count
+    FROM page
+    JOIN events e
+      ON e.community_id = $1
+     AND e.id = page.root_id
+     AND e.deleted_at IS NULL
+    ORDER BY page.latest_activity_at DESC, page.root_id ASC
+    "#
+}
+
+/// Query canonical roots independently of any client timeline window.
+pub async fn get_active_threads(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: Uuid,
+    root_kinds: &[i32],
+    active_since: Option<DateTime<Utc>>,
+    cursor: Option<(DateTime<Utc>, Vec<u8>)>,
+    limit: u32,
+) -> Result<ActiveThreadWindow> {
+    if root_kinds.is_empty() {
+        return Ok(ActiveThreadWindow {
+            rows: Vec::new(),
+            has_more: false,
+            next_cursor: None,
+        });
+    }
+    let capped = limit.clamp(1, 200);
+    let probe = capped + 1;
+    let (cursor_at, cursor_id) = cursor
+        .map(|(at, id)| (Some(at), Some(id)))
+        .unwrap_or((None, None));
+    let db_rows = sqlx::query(active_threads_sql())
+        .bind(community_id.as_uuid())
+        .bind(channel_id)
+        .bind(root_kinds)
+        .bind(active_since)
+        .bind(cursor_at)
+        .bind(cursor_id)
+        .bind(probe as i64)
+        .fetch_all(pool)
+        .await?;
+
+    let has_more = db_rows.len() > capped as usize;
+    let retained = db_rows
+        .into_iter()
+        .take(capped as usize)
+        .collect::<Vec<_>>();
+    // Advance from the last SQL row, even if event reconstruction later skips
+    // that row. Otherwise a corrupt last row can make a page repeat forever.
+    let raw_next_cursor = if has_more {
+        match retained.last() {
+            Some(row) => Some((
+                row.try_get::<DateTime<Utc>, _>("latest_activity_at")?,
+                row.try_get::<Vec<u8>, _>("root_id")?,
+            )),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let mut rows = Vec::with_capacity(capped as usize);
+    for row in retained {
+        let latest_activity_at: DateTime<Utc> = row.try_get("latest_activity_at")?;
+        let reply_count: i32 = row.try_get("reply_count")?;
+        let descendant_count: i32 = row.try_get("descendant_count")?;
+        let Some(stored_event) = row_to_stored_event(row)? else {
+            continue;
+        };
+        rows.push(ActiveThreadRow {
+            stored_event,
+            summary: ThreadSummary {
+                reply_count,
+                descendant_count,
+                last_reply_at: (descendant_count > 0).then_some(latest_activity_at),
+                participants: Vec::new(),
+            },
+            latest_activity_at,
+        });
+    }
+    Ok(ActiveThreadWindow {
+        rows,
+        has_more,
+        next_cursor: raw_next_cursor,
+    })
+}
+
 /// Raw thread_metadata row -- used when processing deletes or computing ancestry.
 #[derive(Debug, Clone)]
 pub struct ThreadMetadataRecord {
@@ -865,7 +1013,29 @@ mod tests {
     };
     use nostr::{EventBuilder, Keys, Kind};
 
-    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
+    const TEST_DB_URL: &str = concat!("postgres://buzz:", "buzz_dev", "@localhost:5432/buzz");
+
+    #[test]
+    fn active_thread_query_is_authoritative_scoped_and_deterministic() {
+        let sql = active_threads_sql();
+        assert!(sql.contains("tm.depth = 0"));
+        assert!(sql.contains("root.kind = ANY($3::int[])"));
+        assert!(sql.contains("root.deleted_at IS NULL"));
+        assert!(sql.contains("reply.deleted_at IS NULL"));
+        assert!(sql.contains("tm.community_id = $1"));
+        assert!(sql.contains("tm.channel_id = $2"));
+        assert!(sql.contains("latest_activity_at >= $4"));
+        assert!(sql.contains("latest_activity_at = $5 AND root_id > $6"));
+        assert!(sql.contains("ORDER BY latest_activity_at DESC, root_id ASC"));
+    }
+
+    #[test]
+    fn active_thread_query_supports_an_unbounded_inactivity_window() {
+        let sql = active_threads_sql();
+        assert!(sql.contains("$4::timestamptz IS NULL"));
+        assert!(!sql.contains("root_id = ANY"));
+        assert!(sql.contains("LIMIT"));
+    }
 
     async fn setup_pool() -> PgPool {
         let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
@@ -1541,6 +1711,132 @@ mod tests {
         )
         .await
         .expect("insert reply event");
+    }
+
+    /// Exercise the authoritative query against Postgres rather than merely
+    /// matching SQL source text. Ineligible kinds, stale activity, and deleted
+    /// descendants must be removed before LIMIT, while same-second eligible
+    /// roots paginate without gaps.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn active_threads_filters_before_limit_and_paginates_ties() {
+        use nostr::Timestamp;
+
+        let pool = setup_pool().await;
+        let author = Keys::generate();
+        let (channel, community) = create_test_channel(
+            &pool,
+            &format!("active-threads-{}", Uuid::new_v4()),
+            ChannelType::Stream,
+            ChannelVisibility::Open,
+            None,
+            author.public_key().to_bytes().as_slice(),
+            None,
+        )
+        .await
+        .expect("create channel");
+        let base = Utc::now().timestamp() as u64 - 1_000;
+        let event_at = |kind: u16, content: &str, seconds: u64| {
+            EventBuilder::new(Kind::Custom(kind), content)
+                .custom_created_at(Timestamp::from(seconds))
+                .sign_with_keys(&author)
+                .expect("sign fixture event")
+        };
+
+        let eligible_a = event_at(9, "eligible-a", base);
+        let eligible_b = event_at(40_002, "eligible-b", base + 1);
+        let ineligible = event_at(45_001, "forum root", base + 2);
+        let stale = event_at(9, "stale root", base + 3);
+        let deleted_only = event_at(9, "deleted-only root", base + 4);
+        let no_replies = event_at(9, "no replies", base + 5);
+        for root in [
+            &eligible_a,
+            &eligible_b,
+            &ineligible,
+            &stale,
+            &deleted_only,
+            &no_replies,
+        ] {
+            insert_root(&pool, community, channel.id, root).await;
+        }
+
+        let tied_at = base + 100;
+        let reply_a = event_at(9, "reply-a", tied_at);
+        let reply_b = event_at(9, "reply-b", tied_at);
+        insert_reply(&pool, community, channel.id, &eligible_a, &reply_a, false).await;
+        insert_reply(&pool, community, channel.id, &eligible_b, &reply_b, false).await;
+
+        // Newer than every eligible row: if kind filtering happens after LIMIT,
+        // this forum root consumes the only slot and hides valid stream roots.
+        let forum_reply = event_at(45_003, "forum reply", base + 200);
+        insert_reply(
+            &pool,
+            community,
+            channel.id,
+            &ineligible,
+            &forum_reply,
+            false,
+        )
+        .await;
+
+        let stale_reply = event_at(9, "stale reply", base + 10);
+        insert_reply(&pool, community, channel.id, &stale, &stale_reply, false).await;
+
+        let deleted_reply = event_at(9, "deleted reply", base + 300);
+        insert_reply(
+            &pool,
+            community,
+            channel.id,
+            &deleted_only,
+            &deleted_reply,
+            false,
+        )
+        .await;
+        sqlx::query("UPDATE events SET deleted_at = NOW() WHERE community_id = $1 AND id = $2")
+            .bind(community.as_uuid())
+            .bind(deleted_reply.id.as_bytes())
+            .execute(&pool)
+            .await
+            .expect("soft-delete reply fixture");
+
+        let cutoff = DateTime::from_timestamp((base + 50) as i64, 0).expect("valid cutoff");
+        let expected = {
+            let mut ids = vec![eligible_a.id.to_hex(), eligible_b.id.to_hex()];
+            ids.sort();
+            ids
+        };
+        let first = get_active_threads(
+            &pool,
+            community,
+            channel.id,
+            &[9, 40_002],
+            Some(cutoff),
+            None,
+            1,
+        )
+        .await
+        .expect("fetch first active-thread page");
+        assert_eq!(first.rows.len(), 1);
+        assert_eq!(first.rows[0].stored_event.event.id.to_hex(), expected[0]);
+        assert_eq!(first.rows[0].summary.descendant_count, 1);
+        assert!(first.has_more);
+        let cursor = first.next_cursor.expect("first page cursor");
+
+        let second = get_active_threads(
+            &pool,
+            community,
+            channel.id,
+            &[9, 40_002],
+            Some(cutoff),
+            Some(cursor),
+            1,
+        )
+        .await
+        .expect("fetch second active-thread page");
+        assert_eq!(second.rows.len(), 1);
+        assert_eq!(second.rows[0].stored_event.event.id.to_hex(), expected[1]);
+        assert!(!second.has_more);
+        assert!(second.next_cursor.is_none());
     }
 
     /// The window's top-level predicate: roots (depth 0), events with no

@@ -662,6 +662,8 @@ class ThreadDetailPage extends HookConsumerWidget {
       );
       return null;
     }, [hasFetchedReplies, replies.length, settleGeometry]);
+    // Read state for every reply belongs to the outermost canonical root.
+    final effectiveRootId = threadHead.rootId ?? threadHead.id;
     final readState = ref.watch(readStateProvider);
     final visibleReplyReadKey = replies
         .map((reply) => '${reply.id}:${reply.createdAt}')
@@ -670,14 +672,20 @@ class ThreadDetailPage extends HookConsumerWidget {
     useEffect(() {
       if (!readState.isReady || replies.isEmpty) return null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        final notifier = ref.read(readStateProvider.notifier);
         for (final reply in replies) {
-          ref
-              .read(readStateProvider.notifier)
-              .markContextRead(msgContextKey(reply.id), reply.createdAt);
+          notifier.markContextRead(msgContextKey(reply.id), reply.createdAt);
         }
+        final latestReplyAt = replies
+            .map((reply) => reply.createdAt)
+            .reduce((left, right) => left > right ? left : right);
+        notifier.markContextRead(
+          threadContextKey(effectiveRootId),
+          latestReplyAt,
+        );
       });
       return null;
-    }, [threadHead.id, readState.isReady, visibleReplyReadKey]);
+    }, [effectiveRootId, readState.isReady, visibleReplyReadKey]);
 
     // Thread-scoped typing indicators (exclude self).
     final allTyping = ref.watch(channelTypingProvider(channelId));
@@ -689,10 +697,6 @@ class ThreadDetailPage extends HookConsumerWidget {
               e.pubkey.toLowerCase() != currentPubkey?.toLowerCase(),
         )
         .toList();
-
-    // The root of the entire thread chain. If the current thread head is
-    // itself a root message its rootId is null, so fall back to its own id.
-    final effectiveRootId = threadHead.rootId ?? threadHead.id;
 
     // Composer size changes and keyboard metrics changes are independent:
     // the dock grows first, then the Scaffold's viewport shrinks once the

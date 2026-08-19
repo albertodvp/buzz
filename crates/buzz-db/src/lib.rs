@@ -3044,6 +3044,28 @@ impl Db {
         thread::get_thread_summary(&self.pool, community_id, event_id).await
     }
 
+    /// Canonical channel thread roots ordered by latest non-deleted reply.
+    pub async fn get_active_threads(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        root_kinds: &[i32],
+        active_since: Option<DateTime<Utc>>,
+        cursor: Option<(DateTime<Utc>, Vec<u8>)>,
+        limit: u32,
+    ) -> Result<thread::ActiveThreadWindow> {
+        thread::get_active_threads(
+            &self.pool,
+            community_id,
+            channel_id,
+            root_kinds,
+            active_since,
+            cursor,
+            limit,
+        )
+        .await
+    }
+
     /// One channel window: top-level rows + summaries + server `has_more`.
     ///
     /// Convenience wrapper over [`Db::get_channel_window_with_session`] for

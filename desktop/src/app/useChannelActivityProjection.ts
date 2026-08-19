@@ -49,9 +49,13 @@ export function useChannelActivityProjection({
   threadActivityItems,
   mutedRootIds,
 }: UseChannelActivityProjectionOptions) {
+  const getOwnThreadReadAt = React.useCallback(
+    (rootId: string) => getOwnReadAt(`thread:${rootId}`),
+    [getOwnReadAt],
+  );
   const getThreadReadAt = React.useCallback(
     (rootId: string, channelId?: string | null) => {
-      const threadReadAt = getOwnReadAt(`thread:${rootId}`);
+      const threadReadAt = getOwnThreadReadAt(rootId);
       if (!channelId) return threadReadAt;
 
       const channelReadAt = getChannelReadAt(channelId);
@@ -59,7 +63,7 @@ export function useChannelActivityProjection({
       if (channelReadAt === null) return threadReadAt;
       return Math.max(threadReadAt, channelReadAt);
     },
-    [getChannelReadAt, getOwnReadAt],
+    [getChannelReadAt, getOwnThreadReadAt],
   );
   const markThreadRead = React.useCallback(
     (rootId: string, timestamp: number) =>
@@ -132,6 +136,7 @@ export function useChannelActivityProjection({
   );
 
   return {
+    getOwnThreadReadAt,
     getThreadReadAt,
     markThreadRead,
     getMessageReadAt,

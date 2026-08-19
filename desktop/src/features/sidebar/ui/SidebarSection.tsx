@@ -37,6 +37,7 @@ import {
   SidebarMenuItem,
 } from "@/shared/ui/sidebar";
 import { ChannelActivityPopover } from "@/features/sidebar/ui/ChannelActivityPopover";
+import { SidebarChannelThreads } from "@/features/sidebar/lib/useChannelSidebarThreads";
 import { useAppShell } from "@/app/AppShellContext";
 
 const SECTION_LABEL_BUTTON_CLASS =
@@ -486,6 +487,9 @@ export function SidebarSection({
                       presenceStatus={presenceByChannelId?.[channel.id]}
                       onSelectChannel={onSelectChannel}
                     />
+                    {channel.channelType === "stream" ? (
+                      <SidebarChannelThreads channelId={channel.id} />
+                    ) : null}
                     {channel.channelType === "dm" &&
                     unreadChannelIds.has(channel.id) &&
                     !(isActiveChannel && selectedChannelId === channel.id) ? (

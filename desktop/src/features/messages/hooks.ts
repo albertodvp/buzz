@@ -66,6 +66,7 @@ import {
   parseChannelWindowResponse,
   parseLiveThreadSummary,
 } from "@/features/messages/lib/channelWindowResponse";
+import { activeThreadsLiveInvalidationFilters } from "@/features/sidebar/lib/activeThreadsLiveInvalidation";
 import {
   CHANNEL_AUX_EVENT_KINDS,
   CHANNEL_TIMELINE_CONTENT_KINDS,
@@ -296,6 +297,13 @@ export function useChannelSubscription(channel: Channel | null) {
 
   const appendMessage = useEffectEvent((event: RelayEvent) => {
     if (!channelId) return;
+    const activeThreadsFilters = activeThreadsLiveInvalidationFilters(
+      channelId,
+      event,
+    );
+    if (activeThreadsFilters) {
+      void queryClient.invalidateQueries(activeThreadsFilters);
+    }
     if (event.kind === KIND_CHANNEL_THREAD_SUMMARY) {
       // Relay-pushed live badge recount — window-store overlay only, never a
       // timeline row (mirrors the page path, where 39005 is metadata).

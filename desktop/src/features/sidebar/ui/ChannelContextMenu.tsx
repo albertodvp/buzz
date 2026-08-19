@@ -22,6 +22,7 @@ import {
 } from "@/features/channels/hooks";
 import { useChannelModerationCapabilities } from "@/features/channels/ui/ChannelManagementModerationActions";
 import type { ChannelSection } from "@/features/sidebar/lib/useChannelSections";
+import { ThreadInactivityMenu } from "@/features/sidebar/ui/ThreadInactivityMenu";
 import {
   ContextMenuIconSlot,
   deferMenuAction,
@@ -236,6 +237,9 @@ export function ChannelContextMenuItems({
   return (
     <>
       <CopyChannelSubmenu channel={channel} />
+      {channel.channelType === "stream" ? (
+        <ThreadInactivityMenu channelId={channel.id} />
+      ) : null}
       {showMove ? (
         <MoveToSectionSubmenu
           channelId={channel.id}

@@ -302,6 +302,17 @@ type MockBridgeOptions = {
    * deliver live reply/aux events while an older response is in flight. */
   threadRepliesDelayMs?: number;
   usersBatchDelayMs?: number;
+  /** Authoritative personal-sidebar thread roots keyed by channel id. */
+  activeThreads?: Record<
+    string,
+    Array<{
+      rootId: string;
+      content: string;
+      kind?: number;
+      latestActivityAt: number;
+      createdAt?: number;
+    }>
+  >;
   /** Delay (ms) for older-history fetches; see e2eBridge mock config. */
   channelWindowDelayMs?: number;
   profileReadDelayMs?: number;

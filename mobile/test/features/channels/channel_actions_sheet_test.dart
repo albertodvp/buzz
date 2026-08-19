@@ -6,6 +6,8 @@ import 'package:buzz/features/channels/channel_management_provider.dart';
 import 'package:buzz/features/channels/channel_sections/channel_sections_provider.dart';
 import 'package:buzz/features/channels/channel_sections/channel_sections_storage.dart';
 import 'package:buzz/features/channels/manage_channel_sheet.dart';
+import 'package:buzz/features/channels/thread_sidebar/thread_sidebar_models.dart';
+import 'package:buzz/features/channels/thread_sidebar/thread_sidebar_provider.dart';
 import 'package:buzz/shared/mentions/agent_identity_provider.dart';
 import 'package:buzz/shared/relay/relay.dart';
 import 'package:buzz/shared/theme/theme.dart';
@@ -61,6 +63,7 @@ Widget _modalApp({
   required Channel channel,
   required Future<List<ChannelMember>> Function() loadMembers,
   required ChannelActions Function(Ref ref) createChannelActions,
+  ThreadSidebarNotifier Function()? createThreadSidebar,
 }) => ProviderScope(
   overrides: [
     currentPubkeyProvider.overrideWith((ref) => _currentPubkey),
@@ -79,6 +82,8 @@ Widget _modalApp({
       ),
     ),
     channelActionsProvider.overrideWith(createChannelActions),
+    if (createThreadSidebar != null)
+      threadSidebarProvider.overrideWith(createThreadSidebar),
   ],
   child: MaterialApp(
     theme: AppTheme.light(),
@@ -481,6 +486,38 @@ void main() {
     );
   });
 
+  testWidgets('thread inactivity survives closing the actions sheet', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    late _RecordingThreadSidebarNotifier threadSidebar;
+    await tester.pumpWidget(
+      _modalApp(
+        channel: _channel(),
+        loadMembers: () async => const [],
+        createChannelActions: (ref) => _FakeChannelActions(ref),
+        createThreadSidebar: () =>
+            threadSidebar = _RecordingThreadSidebarNotifier(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open actions'));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Hide threads after inactivity'));
+    await tester.tap(find.text('Hide threads after inactivity'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('1 day'));
+    await tester.pumpAndSettle();
+
+    expect(threadSidebar.savedChannelId, 'channel-id');
+    expect(threadSidebar.savedInactivity, ThreadSidebarInactivity.oneDay);
+  });
+
   testWidgets('DM omits quick actions, then shows mute and copy rows', (
     tester,
   ) async {
@@ -567,5 +604,22 @@ class _FakeChannelActions extends ChannelActions {
   @override
   Future<void> unarchiveChannel(String channelId) async {
     unarchivedChannelId = channelId;
+  }
+}
+
+class _RecordingThreadSidebarNotifier extends ThreadSidebarNotifier {
+  String? savedChannelId;
+  ThreadSidebarInactivity? savedInactivity;
+
+  @override
+  ThreadSidebarState build() => const ThreadSidebarState(isReady: true);
+
+  @override
+  Future<void> setInactivity(
+    String channelId,
+    ThreadSidebarInactivity inactivity,
+  ) async {
+    savedChannelId = channelId;
+    savedInactivity = inactivity;
   }
 }

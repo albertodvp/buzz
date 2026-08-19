@@ -35,6 +35,7 @@ import 'package:buzz/features/channels/thread_detail_page.dart';
 import 'package:buzz/features/channels/thread_replies_provider.dart';
 import 'package:buzz/features/channels/timeline_message.dart';
 import 'package:buzz/features/channels/channels_provider.dart';
+import 'package:buzz/shared/read_state/read_state_format.dart';
 import 'package:buzz/shared/read_state/read_state_provider.dart';
 import 'package:buzz/features/channels/unread_badge/observed_unread_event.dart';
 import 'package:buzz/features/channels/small_avatar.dart';
@@ -6859,6 +6860,73 @@ void main() {
           matching: find.text(formatDayHeading(timestampForDay(3, 0))),
         ),
         findsOneWidget,
+      );
+    });
+
+    testWidgets('opening a thread advances its reply read frontier', (
+      tester,
+    ) async {
+      final root = _textMsg(
+        id: 'read-thread-root',
+        pubkey: 'alice',
+        content: 'Thread root',
+        createdAt: 1000,
+      );
+      final reply = _textMsg(
+        id: 'read-thread-reply',
+        pubkey: 'bob',
+        content: 'Unread reply',
+        createdAt: 1200,
+        extraTags: const [
+          ['e', 'read-thread-root', '', 'reply'],
+        ],
+      );
+      final readState = _SynchronousReadStateNotifier(
+        const ReadStateState(
+          isReady: true,
+          pubkey: 'self',
+          contexts: {},
+          version: 0,
+        ),
+      );
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: [root],
+          threadReplies: {
+            'read-thread-root': [reply],
+          },
+          readStateNotifier: readState,
+          users: const {
+            'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
+            'bob': UserProfile(pubkey: 'bob', displayName: 'Bob'),
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final threadHead = formatTimeline([root]).single;
+      Navigator.of(tester.element(find.byType(ChannelDetailPage))).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ThreadDetailPage(
+            threadHead: threadHead,
+            allMessages: [threadHead],
+            channelId: _channelId,
+            currentPubkey: 'self',
+            isMember: true,
+            isArchived: false,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        readState.markedContexts[threadContextKey('read-thread-root')],
+        1200,
+      );
+      expect(
+        readState.markedContexts[msgContextKey('read-thread-reply')],
+        1200,
       );
     });
 

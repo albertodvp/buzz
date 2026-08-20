@@ -142,7 +142,7 @@ export function useChannelThreadSidebarPreference(channelId: string) {
 export function SidebarChannelThreads({ channelId }: { channelId: string }) {
   const queryClient = useQueryClient();
   const {
-    getOwnThreadReadAt,
+    getThreadReadAt,
     isReadStateReady,
     markThreadRead,
     readStateVersion,
@@ -248,14 +248,15 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
       selectedLatestReplyAt === null ||
       !isThreadSidebarUnread(
         selectedLatestReplyAt,
-        getOwnThreadReadAt(selectedThread.rootId),
+        getThreadReadAt(selectedThread.rootId, channelId),
       )
     ) {
       return;
     }
     markThreadRead(selectedThread.rootId, selectedLatestReplyAt);
   }, [
-    getOwnThreadReadAt,
+    channelId,
+    getThreadReadAt,
     isReadStateReady,
     markThreadRead,
     readStateVersion,
@@ -280,7 +281,7 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
               selectedRootId !== thread.rootId &&
               isThreadSidebarUnread(
                 thread.latestReplyAt,
-                getOwnThreadReadAt(thread.rootId),
+                getThreadReadAt(thread.rootId, channelId),
               )
             }
             onNavigate={() => {

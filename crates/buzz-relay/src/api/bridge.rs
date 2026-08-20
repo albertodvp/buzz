@@ -333,6 +333,58 @@ fn extract_active_thread_kinds(filter: &nostr::Filter) -> Result<Vec<i32>, &'sta
         .ok_or("thread_roots_by_activity requires at least one kind")
 }
 
+fn validate_active_thread_filter_shape(raw: &Value) -> Result<(), &'static str> {
+    const ALLOWED_KEYS: &[&str] = &[
+        "kinds",
+        "#h",
+        "limit",
+        "thread_roots_by_activity",
+        "thread_active_since",
+        "thread_activity_cursor",
+        "thread_activity_cursor_id",
+    ];
+    let Some(filter) = raw.as_object() else {
+        return Err("thread_roots_by_activity filter must be an object");
+    };
+    if filter
+        .keys()
+        .any(|key| !ALLOWED_KEYS.contains(&key.as_str()))
+    {
+        return Err(
+            "thread_roots_by_activity does not support standard predicates beyond kinds and #h",
+        );
+    }
+    Ok(())
+}
+
+// Keep the relay compatible with the previously shipped mobile client, which
+// batches up to 128 channels. New clients use smaller transport chunks, while
+// the aggregate root budget still bounds response events and signatures.
+const MAX_ACTIVE_THREAD_FILTERS_PER_REQUEST: usize = 128;
+const MAX_ACTIVE_THREAD_ROOTS_PER_REQUEST: u64 = 6_400;
+
+fn validate_active_thread_request_budget(raw_filters: &[Value]) -> Result<(), &'static str> {
+    let active_filters: Vec<&Value> = raw_filters
+        .iter()
+        .filter(|raw| extension_flag(raw, "thread_roots_by_activity"))
+        .collect();
+    if active_filters.len() > MAX_ACTIVE_THREAD_FILTERS_PER_REQUEST {
+        return Err("too many active-thread filters");
+    }
+    let requested_roots = active_filters.iter().try_fold(0_u64, |total, raw| {
+        let limit = raw
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(50)
+            .clamp(1, 200);
+        total.checked_add(limit)
+    });
+    if requested_roots.is_none_or(|total| total > MAX_ACTIVE_THREAD_ROOTS_PER_REQUEST) {
+        return Err("active-thread request exceeds aggregate root budget");
+    }
+    Ok(())
+}
+
 fn extract_active_thread_cursor(raw: &Value) -> ActiveThreadCursorResult {
     let at = raw.get("thread_activity_cursor");
     let id = raw.get("thread_activity_cursor_id");
@@ -629,6 +681,9 @@ async fn handle_active_threads_filter(
     events: &mut Vec<Value>,
 ) -> Result<(), (StatusCode, Json<Value>)> {
     use buzz_core::kind::{KIND_THREAD_SUMMARY, KIND_WINDOW_BOUNDS};
+
+    validate_active_thread_filter_shape(raw)
+        .map_err(|message| api_error(StatusCode::BAD_REQUEST, message))?;
 
     let Some(channel_id) = extract_channel_from_filter(filter) else {
         return Err(api_error(
@@ -1138,6 +1193,8 @@ async fn query_events_authed(
         .map(|v| serde_json::from_value(v.clone()))
         .collect::<Result<_, _>>()
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid filters: {e}")))?;
+    validate_active_thread_request_budget(&raw_filters)
+        .map_err(|message| api_error(StatusCode::BAD_REQUEST, message))?;
     crate::handlers::req::extract_channel_ids_from_filters_limited(&filters)
         .map_err(|()| api_error(StatusCode::BAD_REQUEST, "too many explicit channels"))?;
 
@@ -2526,6 +2583,62 @@ mod tests {
         assert!(extract_active_thread_kinds(&nostr::Filter::new()).is_err());
         assert!(
             extract_active_thread_kinds(&nostr::Filter::new().kinds(Vec::<Kind>::new())).is_err()
+        );
+    }
+
+    #[test]
+    fn active_thread_filter_rejects_ignored_standard_predicates() {
+        for predicate in [
+            serde_json::json!({"authors": ["01".repeat(32)]}),
+            serde_json::json!({"ids": ["02".repeat(32)]}),
+            serde_json::json!({"since": 100}),
+            serde_json::json!({"until": 200}),
+            serde_json::json!({"#p": ["03".repeat(32)]}),
+        ] {
+            let mut raw = serde_json::json!({
+                "kinds": [9],
+                "#h": [uuid::Uuid::new_v4().to_string()],
+                "limit": 50,
+                "thread_roots_by_activity": true,
+                "thread_active_since": 1,
+            });
+            raw.as_object_mut()
+                .expect("filter object")
+                .extend(predicate.as_object().expect("predicate object").clone());
+
+            assert_eq!(
+                validate_active_thread_filter_shape(&raw),
+                Err("thread_roots_by_activity does not support standard predicates beyond kinds and #h")
+            );
+        }
+    }
+
+    #[test]
+    fn active_thread_request_enforces_aggregate_work_budget() {
+        let active_filter = |limit| {
+            serde_json::json!({
+                "kinds": [9],
+                "#h": [uuid::Uuid::new_v4().to_string()],
+                "limit": limit,
+                "thread_roots_by_activity": true,
+            })
+        };
+
+        assert!(validate_active_thread_request_budget(
+            &(0..128).map(|_| active_filter(50)).collect::<Vec<_>>()
+        )
+        .is_ok());
+        assert_eq!(
+            validate_active_thread_request_budget(
+                &(0..129).map(|_| active_filter(1)).collect::<Vec<_>>()
+            ),
+            Err("too many active-thread filters")
+        );
+        assert_eq!(
+            validate_active_thread_request_budget(
+                &(0..33).map(|_| active_filter(200)).collect::<Vec<_>>()
+            ),
+            Err("active-thread request exceeds aggregate root budget")
         );
     }
 

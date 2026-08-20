@@ -24,13 +24,46 @@ NostrEvent _event({
 );
 
 void main() {
-  test('chunks 129 channels within the relay request budget', () {
-    final chunks = threadSidebarChunks(List.generate(129, (index) => index));
-    expect(chunks.map((chunk) => chunk.length), [128, 1]);
-    expect(
-      chunks.expand((chunk) => chunk),
-      orderedEquals(List.generate(129, (index) => index)),
+  test('separates query work budget from subscription channel budget', () {
+    final values = List.generate(129, (index) => index);
+    final queryChunks = threadSidebarQueryChunks(values);
+    final subscriptionChunks = threadSidebarSubscriptionChunks(values);
+
+    expect(queryChunks.map((chunk) => chunk.length), [
+      ...List.filled(16, 8),
+      1,
+    ]);
+    expect(subscriptionChunks.map((chunk) => chunk.length), [128, 1]);
+    expect(queryChunks.expand((chunk) => chunk), orderedEquals(values));
+    expect(subscriptionChunks.expand((chunk) => chunk), orderedEquals(values));
+  });
+
+  test('coalesces live refreshes by affected channel', () {
+    final queue = ThreadSidebarLiveRefreshQueue();
+    queue.add(
+      _event(
+        id: 'reply-a',
+        kind: EventKind.streamMessage,
+        content: 'reply',
+        tags: const [
+          ['h', 'channel-a'],
+          ['e', 'root-a', '', 'reply'],
+        ],
+      ),
     );
+    queue.add(
+      _event(
+        id: 'delete-b',
+        kind: EventKind.deletion,
+        content: '',
+        tags: const [
+          ['h', 'channel-b'],
+        ],
+      ),
+    );
+
+    expect(queue.take(), {'channel-a', 'channel-b'});
+    expect(queue.take(), isEmpty);
   });
 
   test('builds the relay active-thread query with an activity cutoff', () {

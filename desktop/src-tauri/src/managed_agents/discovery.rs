@@ -16,11 +16,11 @@ mod runtime_metadata;
 #[macro_use]
 mod windows_install;
 pub use login_shell::{find_nvm_default_bin, login_shell_path};
-pub(crate) use login_shell::{find_via_login_shell, refresh_login_shell_path};
-#[cfg(test)]
 pub(crate) use login_shell::{
-    is_login_shell_path_uninit, is_safe_nvm_tag, login_shell_candidates, parse_semver_tag,
+    find_via_login_shell, login_shell_candidates, refresh_login_shell_path,
 };
+#[cfg(test)]
+pub(crate) use login_shell::{is_login_shell_path_uninit, is_safe_nvm_tag, parse_semver_tag};
 pub(crate) use presets::{
     canonical_harness_command, command_for_runtime_id, preset_harness_definitions,
     preset_harness_ids,

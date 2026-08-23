@@ -710,6 +710,9 @@ jobs:
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
       - name: Recent-thread authorization and aggregate tests
+        # These tests are #[ignore] only because the default unit suite does
+        # not provision Postgres/Redis. This job does, so nextest's
+        # `ignored-only` mode explicitly runs them here instead of skipping them.
         run: |
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \

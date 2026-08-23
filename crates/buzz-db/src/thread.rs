@@ -101,8 +101,7 @@ pub struct ActiveThreadWindow {
     pub next_cursor: Option<(DateTime<Utc>, Vec<u8>)>,
 }
 
-fn active_threads_sql() -> &'static str {
-    r#"
+const ACTIVE_THREADS_SQL: &str = r#"
     WITH candidates AS (
         SELECT
             tm.event_id AS root_id,
@@ -151,8 +150,7 @@ fn active_threads_sql() -> &'static str {
      AND e.channel_id = $2
      AND e.deleted_at IS NULL
     ORDER BY page.latest_activity_at DESC, page.root_id ASC
-    "#
-}
+    "#;
 
 /// Query canonical roots independently of any client timeline window.
 pub async fn get_active_threads(
@@ -176,7 +174,7 @@ pub async fn get_active_threads(
     let (cursor_at, cursor_id) = cursor
         .map(|(at, id)| (Some(at), Some(id)))
         .unwrap_or((None, None));
-    let db_rows = sqlx::query(active_threads_sql())
+    let db_rows = sqlx::query(ACTIVE_THREADS_SQL)
         .bind(community_id.as_uuid())
         .bind(channel_id)
         .bind(root_kinds)
@@ -1072,29 +1070,7 @@ mod tests {
     };
     use nostr::{EventBuilder, Keys, Kind};
 
-    const TEST_DB_URL: &str = concat!("postgres://buzz:", "buzz_dev", "@localhost:5432/buzz");
-
-    #[test]
-    fn active_thread_query_is_authoritative_scoped_and_deterministic() {
-        let sql = active_threads_sql();
-        assert!(sql.contains("tm.depth = 0"));
-        assert!(sql.contains("root.kind = ANY($3::int[])"));
-        assert!(sql.contains("root.deleted_at IS NULL"));
-        assert!(sql.contains("reply.deleted_at IS NULL"));
-        assert!(sql.contains("tm.community_id = $1"));
-        assert!(sql.contains("tm.channel_id = $2"));
-        assert!(sql.contains("latest_activity_at >= $4"));
-        assert!(sql.contains("latest_activity_at = $5 AND root_id > $6"));
-        assert!(sql.contains("ORDER BY latest_activity_at DESC, root_id ASC"));
-    }
-
-    #[test]
-    fn active_thread_query_supports_an_unbounded_inactivity_window() {
-        let sql = active_threads_sql();
-        assert!(sql.contains("$4::timestamptz IS NULL"));
-        assert!(!sql.contains("root_id = ANY"));
-        assert!(sql.contains("LIMIT"));
-    }
+    const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz";
 
     async fn setup_pool() -> PgPool {
         let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")

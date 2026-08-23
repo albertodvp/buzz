@@ -76,6 +76,9 @@ type AppShellContextValue = {
   // channel so simply landing in it does not hide the wayfinding signal.
   unreadThreadFeedItems: FeedItem[];
   unreadThreadChannelIds: ReadonlySet<string>;
+  // Canonical roots with concrete unread reply evidence. Recent-thread rows
+  // use this instead of inferring unread from a channel-wide aggregate refresh.
+  unreadThreadRootIds: ReadonlySet<string>;
   // Ordinary unread channel-level activity. Sidebar rows use this for text
   // emphasis only; thread activity owns the dot.
   topLevelUnreadChannelIds: ReadonlySet<string>;
@@ -118,6 +121,7 @@ const AppShellContext = React.createContext<AppShellContextValue>({
   locallyUnreadFeedItems: [],
   unreadThreadFeedItems: [],
   unreadThreadChannelIds: EMPTY_SET,
+  unreadThreadRootIds: EMPTY_SET,
   topLevelUnreadChannelIds: EMPTY_SET,
   hasSidebarUnreadProjections: false,
   feedItemState: {

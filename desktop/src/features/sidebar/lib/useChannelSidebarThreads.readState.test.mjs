@@ -10,5 +10,7 @@ const source = await readFile(
 test("recent-thread unread wiring uses the effective channel-plus-thread frontier", () => {
   assert.match(source, /getThreadReadAt\(selectedThread\.rootId, channelId\)/);
   assert.match(source, /getThreadReadAt\(thread\.rootId, channelId\)/);
+  assert.match(source, /unreadThreadRootIds\.has\(selectedThread\.rootId\)/);
+  assert.match(source, /unreadThreadRootIds\.has\(thread\.rootId\)/);
   assert.doesNotMatch(source, /getOwnThreadReadAt/);
 });

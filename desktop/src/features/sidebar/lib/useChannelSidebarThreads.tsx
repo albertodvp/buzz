@@ -146,6 +146,7 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
     isReadStateReady,
     markThreadRead,
     readStateVersion,
+    unreadThreadRootIds,
   } = useAppShell();
   const context = React.useContext(ThreadSidebarContext);
   const { scope, preference } = useChannelThreadSidebarPreference(channelId);
@@ -246,6 +247,7 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
       !selectedThread ||
       !isReadStateReady ||
       selectedLatestReplyAt === null ||
+      !unreadThreadRootIds.has(selectedThread.rootId) ||
       !isThreadSidebarUnread(
         selectedLatestReplyAt,
         getThreadReadAt(selectedThread.rootId, channelId),
@@ -262,6 +264,7 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
     readStateVersion,
     selectedLatestReplyAt,
     selectedThread,
+    unreadThreadRootIds,
   ]);
 
   if (rows.length === 0 && !query.hasNextPage) return null;
@@ -279,6 +282,7 @@ export function SidebarChannelThreads({ channelId }: { channelId: string }) {
             unread={
               isReadStateReady &&
               selectedRootId !== thread.rootId &&
+              unreadThreadRootIds.has(thread.rootId) &&
               isThreadSidebarUnread(
                 thread.latestReplyAt,
                 getThreadReadAt(thread.rootId, channelId),

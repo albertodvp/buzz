@@ -689,7 +689,6 @@ fn check_token_channel_access(auth: &IngestAuth, channel_id: Uuid) -> Result<(),
 }
 
 /// Owned thread metadata for the DB insert.
-#[derive(Debug)]
 pub(crate) struct ThreadMetadataOwned {
     pub event_id: Vec<u8>,
     pub event_created_at: chrono::DateTime<Utc>,
@@ -770,22 +769,15 @@ pub(crate) async fn resolve_nip10_thread_meta(
             if client_root_bytes != effective_root {
                 return Err("root tag does not match thread ancestry".to_string());
             }
-            let root_ts = if effective_root == parent_bytes {
-                parent_created
-            } else {
-                let root_ev = state
-                    .db
-                    .get_event_by_id(community_id, &effective_root)
-                    .await
-                    .map_err(|e| format!("db error looking up thread root: {e}"))?
-                    .ok_or_else(|| "thread root not found".to_string())?;
-                match root_ev.channel_id {
-                    Some(root_ch) if root_ch == channel_id => {}
-                    Some(_) => return Err("thread root belongs to a different channel".to_string()),
-                    None => return Err("thread root has no channel association".to_string()),
-                }
+            let root_ts = if let Ok(Some(root_ev)) = state
+                .db
+                .get_event_by_id(community_id, &effective_root)
+                .await
+            {
                 chrono::DateTime::from_timestamp(root_ev.event.created_at.as_secs() as i64, 0)
                     .unwrap_or(parent_created)
+            } else {
+                parent_created
             };
             let depth = meta.depth + 1;
             if depth > 100 {
@@ -799,10 +791,9 @@ pub(crate) async fn resolve_nip10_thread_meta(
                 &parent_event.event,
                 &parent_bytes,
                 parent_created,
-                channel_id,
                 state,
             )
-            .await?;
+            .await;
 
             if client_root_bytes != parent_root {
                 return Err("root tag does not match thread ancestry".to_string());
@@ -850,9 +841,8 @@ async fn derive_ancestry_from_parent_tags(
     parent_event: &Event,
     parent_bytes: &[u8],
     parent_created: chrono::DateTime<Utc>,
-    channel_id: Uuid,
     state: &AppState,
-) -> Result<(Vec<u8>, chrono::DateTime<Utc>, i32), String> {
+) -> (Vec<u8>, chrono::DateTime<Utc>, i32) {
     let marked_ancestor = |id_hex: &str| hex::decode(id_hex).ok().filter(|b| b.len() == 32);
     let markers = buzz_core::nip10::parse_thread_markers(&parent_event.tags);
     let parent_root = markers
@@ -863,23 +853,16 @@ async fn derive_ancestry_from_parent_tags(
         .unwrap_or_else(|| parent_bytes.to_vec());
 
     if parent_root.as_slice() == parent_bytes {
-        Ok((parent_root, parent_created, 1))
+        (parent_root, parent_created, 1)
     } else {
-        let root_ev = state
-            .db
-            .get_event_by_id(community_id, &parent_root)
-            .await
-            .map_err(|e| format!("db error looking up thread root: {e}"))?
-            .ok_or_else(|| "thread root not found".to_string())?;
-        match root_ev.channel_id {
-            Some(root_ch) if root_ch == channel_id => {}
-            Some(_) => return Err("thread root belongs to a different channel".to_string()),
-            None => return Err("thread root has no channel association".to_string()),
-        }
         let root_created =
-            chrono::DateTime::from_timestamp(root_ev.event.created_at.as_secs() as i64, 0)
-                .unwrap_or(parent_created);
-        Ok((parent_root, root_created, 2))
+            if let Ok(Some(root_ev)) = state.db.get_event_by_id(community_id, &parent_root).await {
+                chrono::DateTime::from_timestamp(root_ev.event.created_at.as_secs() as i64, 0)
+                    .unwrap_or(parent_created)
+            } else {
+                parent_created
+            };
+        (parent_root, root_created, 2)
     }
 }
 
@@ -997,10 +980,9 @@ pub(crate) async fn resolve_relay_reply_thread_meta(
                 &parent_event.event,
                 &parent_bytes,
                 parent_created,
-                channel_id,
                 state,
             )
-            .await?
+            .await
         }
     };
 

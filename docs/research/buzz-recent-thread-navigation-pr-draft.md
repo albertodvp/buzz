@@ -11,6 +11,20 @@ Replies can continue after their root scrolls out of the channel timeline. The
 sidebar provides a small, channel-scoped rediscovery surface without changing
 message identity, reply semantics, or publishing new state.
 
+## Why this requires relay and database work
+
+Neither client has a complete thread index: channel timelines are bounded, a
+root may already have scrolled out, and activity can come from any descendant.
+Computing the list in Desktop or Mobile would therefore produce incomplete and
+client-dependent ordering.
+
+The database is the only layer with the complete `thread_metadata` ancestry,
+soft-deletion state, and community/channel boundary needed to aggregate this
+correctly before applying the page limit. The relay exposes that aggregate
+through the existing generic Nostr query bridge; this change adds no dedicated
+HTTP endpoint and no migration. Clients continue to own only the local
+inactivity preference and presentation state.
+
 ## Behavior
 
 - Relay/database query returns permission-checked roots ordered by aggregate
@@ -24,7 +38,8 @@ message identity, reply semantics, or publishing new state.
 
 ## Validation
 
-- A required Postgres/Redis CI step runs the database and relay tests covering
+- A required Postgres/Redis CI step explicitly runs the infrastructure-backed
+  `#[ignore]` database and relay tests covering
   root-kind pushdown, descendant activity, deletion, cutoff, deterministic
   pagination, bounds, participant summaries, and cross-channel authorization.
 - Desktop unit/E2E tests cover response parsing, local preferences, filtering,

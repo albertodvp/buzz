@@ -198,7 +198,7 @@ test("recent thread sidebar keeps activity filtering and canonical navigation se
   await expect.poll(() => getHashSearchParam(page, "thread")).toBeNull();
 });
 
-test("recent thread unread dots clear only when that thread is opened", async ({
+test("a live reply lights only its matching recent thread", async ({
   page,
 }) => {
   const now = Math.floor(Date.now() / 1000);
@@ -207,13 +207,13 @@ test("recent thread unread dots clear only when that thread is opened", async ({
       [GENERAL_CHANNEL_ID]: [
         {
           rootId: FRESH_ROOT,
-          content: "Unread release discussion",
-          latestActivityAt: now + 60,
+          content: "Existing release discussion",
+          latestActivityAt: now - 60,
         },
         {
           rootId: SECOND_ROOT,
-          content: "Unrelated agent session",
-          latestActivityAt: now + 61,
+          content: "Target agent session",
+          latestActivityAt: now - 30,
         },
       ],
     },
@@ -221,71 +221,51 @@ test("recent thread unread dots clear only when that thread is opened", async ({
   await page.goto("/");
   await page.getByTestId("channel-general").click();
 
-  const unreadThread = page.getByTestId(`sidebar-thread-${FRESH_ROOT}`);
-  const unrelatedThread = page.getByTestId(`sidebar-thread-${SECOND_ROOT}`);
-  await expect(unreadThread.getByTestId("sidebar-thread-unread")).toBeVisible();
-  await expect(
-    unrelatedThread.getByTestId("sidebar-thread-unread"),
-  ).toBeVisible();
+  const otherThread = page.getByTestId(`sidebar-thread-${FRESH_ROOT}`);
+  const targetThread = page.getByTestId(`sidebar-thread-${SECOND_ROOT}`);
+  await expect(otherThread.getByTestId("sidebar-thread-unread")).toHaveCount(0);
+  await expect(targetThread.getByTestId("sidebar-thread-unread")).toHaveCount(
+    0,
+  );
+  await waitForGeneralLiveSubscription(page);
 
-  await unrelatedThread.click();
-  const threadPanel = page.getByTestId("message-thread-panel");
-  await expect(threadPanel).toBeVisible();
-  await expect(unreadThread.getByTestId("sidebar-thread-unread")).toBeVisible();
-
-  const reply = `Unrelated reply ${Date.now()}`;
-  await threadPanel.getByTestId("message-input").fill(reply);
-  await threadPanel.getByTestId("send-message").click();
-  const replyRow = threadPanel
-    .getByTestId("message-thread-replies")
-    .getByTestId("message-row")
-    .filter({ hasText: reply });
-  await expect(replyRow).toBeVisible();
-  await expect(unreadThread.getByTestId("sidebar-thread-unread")).toBeVisible();
-
-  const replyId = await replyRow.getAttribute("data-message-id");
-  if (!replyId) throw new Error("Sent reply has no message id.");
-  await replyRow.hover();
-  await replyRow.getByTestId(`more-actions-${replyId}`).click();
-  await page.getByTestId(`delete-message-${replyId}`).click();
-  await page
-    .getByRole("alertdialog")
-    .getByRole("button", { name: "Delete" })
-    .click();
-  await expect(page.getByRole("alertdialog")).toHaveCount(0);
-
-  // Production emits a fresh top-level kind:40099 tombstone after deletion.
-  // It advances the channel frontier, but must not consume another thread's
-  // own unread marker.
   await page.evaluate(
-    ({ createdAt }) => {
-      (
-        window as Window & {
-          __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
-            channelName: string;
-            content: string;
-            kind: number;
-            createdAt: number;
-          }) => unknown;
-        }
-      ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+    ({ channelId, createdAt, currentPubkey, otherRoot, targetRoot }) => {
+      window.__BUZZ_E2E_SET_ACTIVE_THREADS__?.(channelId, [
+        {
+          rootId: otherRoot,
+          content: "Existing release discussion",
+          latestActivityAt: createdAt - 60,
+        },
+        {
+          rootId: targetRoot,
+          content: "Target agent session",
+          latestActivityAt: createdAt,
+        },
+      ]);
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName: "general",
-        content: JSON.stringify({ type: "message_deleted" }),
-        kind: 40099,
+        content: "Reply in the target thread only",
+        parentEventId: targetRoot,
+        mentionPubkeys: [currentPubkey],
         createdAt,
       });
     },
-    { createdAt: now + 120 },
+    {
+      channelId: GENERAL_CHANNEL_ID,
+      createdAt: now + 60,
+      currentPubkey: MOCK_PUBKEY,
+      otherRoot: FRESH_ROOT,
+      targetRoot: SECOND_ROOT,
+    },
   );
-  await expect(unreadThread.getByTestId("sidebar-thread-unread")).toBeVisible();
 
-  await unreadThread.click();
-  await expect(unreadThread.getByTestId("sidebar-thread-unread")).toHaveCount(
+  await expect(targetThread.getByTestId("sidebar-thread-unread")).toBeVisible();
+  await expect(otherThread.getByTestId("sidebar-thread-unread")).toHaveCount(0);
+
+  await targetThread.click();
+  await expect(targetThread.getByTestId("sidebar-thread-unread")).toHaveCount(
     0,
   );
-  await unreadThread.click();
-  await expect(page.getByTestId("focus-thread-drawer-overlay")).toHaveCount(0);
-  await expect(unreadThread.getByTestId("sidebar-thread-unread")).toHaveCount(
-    0,
-  );
+  await expect(otherThread.getByTestId("sidebar-thread-unread")).toHaveCount(0);
 });

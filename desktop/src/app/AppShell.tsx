@@ -419,6 +419,7 @@ export function AppShell() {
     locallyUnreadFeedItems,
     unreadThreadFeedItems,
     unreadThreadChannelIds,
+    unreadThreadRootIds,
   } = useChannelActivityProjection({
     channels,
     feed: homeFeedQuery.data?.feed,
@@ -739,6 +740,7 @@ export function AppShell() {
             locallyUnreadFeedItems,
             unreadThreadFeedItems,
             unreadThreadChannelIds,
+            unreadThreadRootIds,
             topLevelUnreadChannelIds,
             hasSidebarUnreadProjections: true,
             feedItemState,
